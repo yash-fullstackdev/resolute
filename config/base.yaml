@@ -1,0 +1,129 @@
+# Underlying symbols with metadata
+symbols:
+  indices:
+    - symbol: NIFTY
+      exchange: NSE
+      lot_size: 50
+      tick_size: 0.05
+      expiry_day: thursday     # weekly
+      segment: NSE_INDEX
+    - symbol: BANKNIFTY
+      exchange: NSE
+      lot_size: 15
+      tick_size: 0.05
+      expiry_day: wednesday    # weekly (changed to Wednesday)
+      segment: NSE_INDEX
+    - symbol: FINNIFTY
+      exchange: NSE
+      lot_size: 40
+      tick_size: 0.05
+      expiry_day: tuesday      # weekly
+      segment: NSE_INDEX
+    - symbol: MIDCPNIFTY
+      exchange: NSE
+      lot_size: 75
+      tick_size: 0.05
+      expiry_day: monday
+      segment: NSE_INDEX
+    - symbol: SENSEX
+      exchange: BSE
+      lot_size: 10
+      tick_size: 0.05
+      expiry_day: friday
+      segment: BSE_INDEX
+
+  equity:
+    - symbol: RELIANCE
+      exchange: NSE
+      lot_size: 250
+      tick_size: 0.05
+      segment: NSE_FO
+    - symbol: HDFCBANK
+      exchange: NSE
+      lot_size: 550
+      tick_size: 0.05
+      segment: NSE_FO
+    - symbol: INFY
+      exchange: NSE
+      lot_size: 400
+      tick_size: 0.05
+      segment: NSE_FO
+    - symbol: TCS
+      exchange: NSE
+      lot_size: 175
+      tick_size: 0.05
+      segment: NSE_FO
+    - symbol: BAJFINANCE
+      exchange: NSE
+      lot_size: 125
+      tick_size: 0.05
+      segment: NSE_FO
+    # Add more Nifty 50 components as needed
+
+  mcx_commodities:
+    - symbol: GOLD
+      exchange: MCX
+      lot_size: 100           # 100 grams
+      tick_size: 1.0          # ₹1 per gram
+      segment: MCX
+      mini_symbol: GOLDM
+      mini_lot_size: 10
+    - symbol: SILVER
+      exchange: MCX
+      lot_size: 30000         # 30 kg = 30,000 grams
+      tick_size: 1.0
+      segment: MCX
+    - symbol: CRUDEOIL
+      exchange: MCX
+      lot_size: 100           # 100 barrels
+      tick_size: 1.0          # ₹1 per barrel
+      segment: MCX
+    - symbol: CRUDEOILM
+      exchange: MCX
+      lot_size: 10
+      tick_size: 1.0
+      segment: MCX
+    - symbol: NATURALGAS
+      exchange: MCX
+      lot_size: 1250          # MMBtu
+      tick_size: 0.10
+      segment: MCX
+    - symbol: COPPER
+      exchange: MCX
+      lot_size: 2500          # 2.5 MT = 2,500 kg
+      tick_size: 0.05
+      segment: MCX
+
+# Market hours (IST)
+market_hours:
+  nse:
+    open: "09:15"
+    close: "15:30"
+    pre_open: "09:00"
+  mcx:
+    open: "09:00"
+    close: "23:30"
+  option_buying_cutoff:      # Don't enter new positions after this time
+    index_weekly: "14:30"
+    equity_monthly: "15:00"
+    mcx: "22:00"
+
+# Risk parameters (global defaults, overridable per strategy)
+risk:
+  max_risk_per_trade_pct: 2.0
+  max_portfolio_premium_pct: 30.0   # Max % of capital in open premiums
+  max_positions_per_underlying: 2
+  max_concurrent_positions: 15
+  paper_trading_slippage_pct: 0.10
+
+# NATS
+nats:
+  url: nats://localhost:4222
+  reconnect_wait: 2s
+  max_reconnects: 10
+
+# Database
+database:
+  url: ${DATABASE_URL}              # postgresql://user:pass@localhost:5432/options_db
+  max_connections: 20
+  min_connections: 5

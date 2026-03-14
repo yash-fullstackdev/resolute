@@ -1,0 +1,274 @@
+version: '3.9'
+
+networks:
+  options-net:
+    driver: bridge
+
+services:
+
+  # ── Infrastructure ───────────────────────────────────────────────────────────
+
+  nats:
+    image: nats:2.10-alpine
+    ports:
+      - "4222:4222"
+      - "8222:8222"   # monitoring
+    command: ["-js", "-m", "8222"]
+    restart: unless-stopped
+    networks:
+      - options-net
+    healthcheck:
+      test: ["CMD", "nats-server", "--signal", "ldm"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: "0.50"
+
+  timescaledb:
+    image: timescale/timescaledb:latest-pg15
+    environment:
+      POSTGRES_USER: ${DB_USER:-options}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_DB: ${DB_NAME:-options_db}
+    volumes:
+      - timescaledb_data:/var/lib/postgresql/data
+      - ./shared/schema/timescaledb_init.sql:/docker-entrypoint-initdb.d/init.sql
+    ports:
+      - "5432:5432"
+    restart: unless-stopped
+    networks:
+      - options-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-options} -d ${DB_NAME:-options_db}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: "1.00"
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    restart: unless-stopped
+    networks:
+      - options-net
+    # Used for: JWT jti blacklist, email verification tokens, override cooldown timers
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: "0.25"
+
+  # ── Shared services (no user context) ────────────────────────────────────────
+
+  feed_gateway:
+    build: ./services/feed_gateway
+    environment:
+      # feed_gateway uses its own platform-level broker account for market data
+      # This is NOT a user trading account — it's for feed subscription only
+      FEED_BROKER: dhan                         # dhan | zerodha | paper
+      FEED_CLIENT_ID: ${FEED_CLIENT_ID}
+      FEED_ACCESS_TOKEN: ${FEED_ACCESS_TOKEN}
+      NATS_URL: nats://nats:4222
+      CONFIG_PATH: /config
+    volumes:
+      - ./config:/config:ro
+    depends_on:
+      nats:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - options-net
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: "0.50"
+
+  signal_engine:
+    build: ./services/signal_engine
+    environment:
+      NATS_URL: nats://nats:4222
+      DATABASE_URL: ${DATABASE_URL}
+      RBI_REPO_RATE: ${RBI_REPO_RATE:-6.5}
+      CONFIG_PATH: /config
+    volumes:
+      - ./config:/config:ro
+    depends_on:
+      nats:
+        condition: service_healthy
+      timescaledb:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - options-net
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: "1.00"
+
+  # ── SaaS services ────────────────────────────────────────────────────────────
+
+  auth_service:
+    build: ./services/auth_service
+    ports:
+      - "8001:8001"
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+      REDIS_URL: redis://redis:6379/0
+      JWT_SECRET: ${JWT_SECRET}
+      JWT_ACCESS_TOKEN_EXPIRE_MINUTES: 15
+      JWT_REFRESH_TOKEN_EXPIRE_DAYS: 30
+      CREDENTIAL_MASTER_KEY: ${CREDENTIAL_MASTER_KEY}   # 32-byte hex
+      ADMIN_JWT_SECRET: ${ADMIN_JWT_SECRET}              # Separate secret for admin tokens
+      SMTP_HOST: ${SMTP_HOST}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USER: ${SMTP_USER}
+      SMTP_PASSWORD: ${SMTP_PASSWORD}
+      FROM_EMAIL: ${FROM_EMAIL}
+      FRONTEND_URL: ${FRONTEND_URL}                      # For email verification links
+    depends_on:
+      timescaledb:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - options-net
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: "0.50"
+
+  user_worker_pool:
+    build: ./services/user_worker_pool
+    environment:
+      NATS_URL: nats://nats:4222
+      DATABASE_URL: ${DATABASE_URL}
+      AUTH_SERVICE_URL: http://auth_service:8001
+      AUTH_INTERNAL_TOKEN: ${AUTH_INTERNAL_TOKEN}        # mTLS token for service-to-service
+      CONFIG_PATH: /config
+      PLAN_LOCK_TIME_IST: ${PLAN_LOCK_TIME_IST:-09:10}
+      PLAN_UNLOCK_TIME_IST: ${PLAN_UNLOCK_TIME_IST:-15:35}
+      OVERRIDE_COOLDOWN_SECONDS: ${OVERRIDE_COOLDOWN_SECONDS:-60}
+      DEFAULT_DAILY_LOSS_LIMIT_INR: ${DEFAULT_DAILY_LOSS_LIMIT_INR:-5000}
+      DEFAULT_MAX_TRADES_PER_DAY: ${DEFAULT_MAX_TRADES_PER_DAY:-5}
+    volumes:
+      - ./config:/config:ro
+    depends_on:
+      nats:
+        condition: service_healthy
+      timescaledb:
+        condition: service_healthy
+      signal_engine:
+        condition: service_started
+      auth_service:
+        condition: service_started
+    restart: unless-stopped
+    networks:
+      - options-net
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: "1.00"
+
+  order_router:
+    build: ./services/order_router
+    environment:
+      NATS_URL: nats://nats:4222
+      DATABASE_URL: ${DATABASE_URL}
+      AUTH_SERVICE_URL: http://auth_service:8001
+      AUTH_INTERNAL_TOKEN: ${AUTH_INTERNAL_TOKEN}
+      TOKEN_REFRESH_TIME_IST: "07:00"    # Daily Dhan token refresh time
+      CONFIG_PATH: /config
+    volumes:
+      - ./config:/config:ro
+    depends_on:
+      nats:
+        condition: service_healthy
+      timescaledb:
+        condition: service_healthy
+      auth_service:
+        condition: service_started
+    restart: unless-stopped
+    networks:
+      - options-net
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: "0.50"
+
+  dashboard_api:
+    build: ./services/dashboard_api
+    ports:
+      - "8000:8000"
+    environment:
+      NATS_URL: nats://nats:4222
+      DATABASE_URL: ${DATABASE_URL}
+      REDIS_URL: redis://redis:6379/0
+      JWT_SECRET: ${JWT_SECRET}
+      ADMIN_JWT_SECRET: ${ADMIN_JWT_SECRET}
+    depends_on:
+      nats:
+        condition: service_healthy
+      timescaledb:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      auth_service:
+        condition: service_started
+    restart: unless-stopped
+    networks:
+      - options-net
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: "1.00"
+
+  # ── Frontend ─────────────────────────────────────────────────────────────────
+
+  frontend:
+    build: ./frontend
+    ports:
+      - "3000:3000"
+    environment:
+      NEXT_PUBLIC_API_URL: http://localhost:8000/api/v1
+      NEXT_PUBLIC_AUTH_URL: http://localhost:8001/auth/v1
+      NEXT_PUBLIC_WS_URL: ws://localhost:8000/ws
+    depends_on:
+      dashboard_api:
+        condition: service_started
+      auth_service:
+        condition: service_started
+    restart: unless-stopped
+    networks:
+      - options-net
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: "0.50"
+
+volumes:
+  timescaledb_data:

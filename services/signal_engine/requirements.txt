@@ -1,0 +1,21 @@
+# signal_engine dependencies
+
+# Core
+numpy>=1.26,<2.1
+numba>=0.59,<0.61
+
+# NATS
+nats-py>=2.7,<3.0
+
+# Database
+asyncpg>=0.29,<0.31
+
+# Observability
+structlog>=24.1,<25.0
+prometheus-client>=0.21,<1.0
+
+# HTTP server for metrics
+aiohttp>=3.9,<4.0
+
+# Typing / dataclasses (stdlib, listed for clarity)
+# dataclasses — stdlib >=3.10

@@ -1,0 +1,41 @@
+syntax = "proto3";
+
+package resolute;
+
+option go_package = "github.com/resolute/india-options-builder/shared/proto";
+
+import "google/protobuf/timestamp.proto";
+
+message Signal {
+    string id = 1;                              // UUID
+    string tenant_id = 2;                       // UUID — owner
+    google.protobuf.Timestamp timestamp = 3;
+    string strategy_name = 4;                   // e.g. "long_call", "short_straddle"
+    string underlying = 5;
+    string segment = 6;                         // "NSE_INDEX" | "NSE_FO" | "MCX"
+    string direction = 7;                       // "BUY_CALL" | "SELL_STRADDLE" | "EXIT" etc.
+    double strength = 8;                        // 0.0–1.0
+    string regime = 9;                          // "BULL_LOW_VOL" | "SIDEWAYS" etc.
+    repeated OrderLeg legs = 10;
+    double max_loss_inr = 11;
+    double target_profit_inr = 12;
+    double stop_loss_pct = 13;
+    google.protobuf.Timestamp time_stop = 14;
+    string rationale = 15;
+    string strategy_source = 16;                // "BUILTIN" | "CUSTOM_AI"
+    optional string custom_strategy_id = 17;    // UUID if source is CUSTOM_AI
+}
+
+message OrderLeg {
+    string symbol = 1;
+    string exchange = 2;                        // "NSE" | "NFO" | "MCX"
+    string instrument_type = 3;                 // "CE" | "PE" | "FUT"
+    double strike = 4;
+    string expiry = 5;                          // ISO date
+    string action = 6;                          // "BUY" | "SELL"
+    int32 quantity = 7;                         // Number of lots
+    int32 lot_size = 8;
+    string order_type = 9;                      // "LIMIT" | "MARKET"
+    optional double limit_price = 10;
+    string product = 11;                        // "MIS" | "NRML"
+}

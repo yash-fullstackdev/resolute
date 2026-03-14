@@ -1,0 +1,32 @@
+syntax = "proto3";
+
+package resolute;
+
+option go_package = "github.com/resolute/india-options-builder/shared/proto";
+
+import "google/protobuf/timestamp.proto";
+
+message Tick {
+    string symbol = 1;                          // "NIFTY", "BANKNIFTY", "MCX:GOLD"
+    google.protobuf.Timestamp timestamp = 2;    // UTC, microsecond precision
+    string segment = 3;                         // "NSE_INDEX" | "NSE_FO" | "MCX"
+    double last_price = 4;
+    double open = 5;
+    double high = 6;
+    double low = 7;
+    double close = 8;                           // Previous close
+    int64 volume = 9;
+    int64 oi = 10;                              // Open interest
+    double bid = 11;
+    double ask = 12;
+    int64 bid_qty = 13;
+    int64 ask_qty = 14;
+    optional string expiry = 15;                // ISO date for derivative ticks
+    optional double strike = 16;
+    optional string option_type = 17;           // "CE" | "PE"
+    optional double underlying_price = 18;      // Spot price for options ticks
+}
+
+message TickBatch {
+    repeated Tick ticks = 1;
+}

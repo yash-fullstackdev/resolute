@@ -1,0 +1,278 @@
+# Per-strategy configuration — all fields overridable at runtime via dashboard API
+
+long_call:
+  enabled: true
+  allowed_segments: [NSE_INDEX, NSE_FO, MCX]
+  min_dte: 7
+  max_dte: 35
+  max_iv_rank: 60
+  max_india_vix: 20
+  min_pcr: 0.6            # Avoid if market too bearish
+  max_pcr: 1.2
+  strike_selection: ATM   # ATM | 1_OTM | 2_OTM
+  stop_loss_pct: 38
+  profit_target_pct: 100  # 100% = double your money, then trail
+  time_stop_rule: wednesday_3pm_weekly
+
+long_put:
+  enabled: true
+  allowed_segments: [NSE_INDEX, NSE_FO, MCX]
+  min_dte: 7
+  max_dte: 35
+  max_iv_rank: 60
+  max_india_vix: 25
+  strike_selection: ATM
+  stop_loss_pct: 38
+  profit_target_pct: 100
+  time_stop_rule: wednesday_3pm_weekly
+
+bull_call_spread:
+  enabled: true
+  allowed_segments: [NSE_INDEX, NSE_FO, MCX]
+  min_dte: 15
+  max_dte: 45
+  min_iv_rank: 35         # Need some IV to make the sold leg worthwhile
+  max_iv_rank: 75
+  spread_width_pct: 1.0   # Spread width as % of underlying price
+  stop_loss_pct: 45
+  profit_target_pct: 75   # Take profit at 75% of max profit
+  time_stop_rule: profit_target_or_21dte
+
+bear_put_spread:
+  enabled: true
+  allowed_segments: [NSE_INDEX, NSE_FO, MCX]
+  min_dte: 15
+  max_dte: 45
+  min_iv_rank: 35
+  max_iv_rank: 75
+  spread_width_pct: 1.0
+  stop_loss_pct: 45
+  profit_target_pct: 75
+  time_stop_rule: profit_target_or_21dte
+
+long_straddle:
+  enabled: true
+  allowed_segments: [NSE_INDEX, MCX]   # Not on individual equity (earnings straddles need separate config)
+  event_lookahead_days: 2
+  max_iv_rank: 55          # Don't buy straddles when IV already elevated
+  min_expected_move_multiple: 1.2  # Implied move must be 1.2× cheaper than expected
+  stop_loss_pct: 30
+  time_stop_rule: event_day_1430
+
+long_strangle:
+  enabled: true
+  allowed_segments: [NSE_INDEX, NSE_FO, MCX]
+  event_lookahead_days: 3
+  max_iv_rank: 65
+  otm_strikes: 2           # How many strikes OTM for each leg
+  stop_loss_pct: 40
+  time_stop_rule: event_day_1400
+
+pcr_contrarian:
+  enabled: true
+  allowed_segments: [NSE_INDEX]     # Indices only
+  pcr_extreme_low: 0.70             # Below this = buy calls
+  pcr_extreme_high: 1.50            # Above this = buy puts
+  pcr_persistence_sessions: 2       # PCR must be extreme for N sessions
+  min_dte: 5
+  max_dte: 10
+  stop_loss_pct: 35
+  time_stop_rule: weekly_thursday_1000
+
+event_directional:
+  enabled: true
+  allowed_segments: [NSE_INDEX, MCX]
+  entry_time_ist: "09:30"           # Enter 15 min after market open on event day
+  stop_loss_pct: 100                # Time stop is primary, premium stop is secondary
+  time_stop_rule: event_day_1430
+
+mcx_gold_silver:
+  enabled: true
+  allowed_segments: [MCX]
+  commodities: [GOLD, GOLDM, SILVER]
+  max_iv_rank: 55
+  min_dte: 15
+  max_dte: 35
+  stop_loss_pct: 40
+  time_stop_rule: mcx_5d_before_expiry
+  use_mini: true                    # Use GOLDM when portfolio is smaller
+
+mcx_crude_put:
+  enabled: true
+  allowed_segments: [MCX]
+  commodities: [CRUDEOIL, CRUDEOILM]
+  max_iv_rank: 50
+  min_dte: 10
+  max_dte: 25
+  stop_loss_pct: 35
+  time_stop_rule: mcx_7d_before_expiry
+  no_overnight_near_opec: true      # Block new positions within 1 day of OPEC meeting
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# HYBRID strategies (GROWTH tier, ₹50k+ capital required)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+iron_butterfly_long:
+  enabled: true
+  category: HYBRID
+  min_capital_tier: GROWTH
+  allowed_segments: [NSE_INDEX, MCX]
+  min_iv_rank: 40
+  max_iv_rank: 80
+  wing_width: 3              # Strikes OTM for short wings
+  stop_loss_pct: 35
+  time_stop_rule: event_day_1430
+
+diagonal_spread:
+  enabled: true
+  category: HYBRID
+  min_capital_tier: GROWTH
+  allowed_segments: [NSE_INDEX, NSE_FO]
+  min_iv_rank: 30
+  max_vix: 22
+  far_expiry_dte: 30         # 30–45 DTE for long leg
+  near_expiry_dte: 7         # 7–14 DTE for short leg
+  stop_loss_pct: 40
+  time_stop_rule: 5dte_far_expiry
+
+ratio_back_spread:
+  enabled: true
+  category: HYBRID
+  min_capital_tier: GROWTH
+  allowed_segments: [NSE_INDEX]
+  max_iv_rank: 50
+  ratio_otm_strikes: 2       # Distance OTM for the 2x long legs
+  stop_loss_pct: 50
+  time_stop_rule: 3dte
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# SELLING strategies (PRO tier, ₹2L+ capital required)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+short_straddle:
+  enabled: true
+  category: SELLING
+  min_capital_tier: PRO
+  allowed_segments: [NSE_INDEX]
+  min_iv_rank: 60
+  min_vix: 16
+  max_vix: 25
+  event_exclusion_days: 3     # Don't enter within 3 days of major event
+  min_dte: 15
+  max_dte: 25
+  adjustment_trigger_pct: 1.5 # Roll if underlying moves > 1.5% from entry
+  stop_loss_credit_multiple: 1.5  # Exit if loss = 150% of credit received
+  profit_target_pct: 50       # Book profits at 50% of max credit
+  time_stop_rule: 3dte
+
+short_strangle:
+  enabled: true
+  category: SELLING
+  min_capital_tier: PRO
+  allowed_segments: [NSE_INDEX]
+  min_iv_rank: 50
+  min_vix: 14
+  max_vix: 22
+  event_exclusion_days: 3
+  strangle_otm_strikes: 3     # Each leg 3 strikes OTM
+  min_dte: 20
+  max_dte: 30
+  stop_loss_credit_multiple: 2.0
+  profit_target_pct: 50
+  time_stop_rule: 5dte
+
+credit_spread_call:
+  enabled: true
+  category: SELLING
+  min_capital_tier: PRO
+  allowed_segments: [NSE_INDEX, NSE_FO]
+  min_iv_rank: 40
+  spread_width_strikes: 2     # Distance between short and long strikes
+  min_dte: 15
+  max_dte: 25
+  stop_loss_credit_multiple: 2.0
+  profit_target_pct: 65
+  time_stop_rule: 3dte
+
+credit_spread_put:
+  enabled: true
+  category: SELLING
+  min_capital_tier: PRO
+  allowed_segments: [NSE_INDEX, NSE_FO]
+  min_iv_rank: 40
+  spread_width_strikes: 2
+  min_dte: 15
+  max_dte: 25
+  stop_loss_credit_multiple: 2.0
+  profit_target_pct: 65
+  time_stop_rule: 3dte
+
+iron_condor:
+  enabled: true
+  category: SELLING
+  min_capital_tier: PRO
+  allowed_segments: [NSE_INDEX]
+  min_iv_rank: 50
+  min_vix: 14
+  max_vix: 22
+  event_exclusion_days: 5     # Iron condors HATE events — wider exclusion
+  condor_wing_width: 3        # Short strikes distance from ATM
+  condor_spread_width: 2      # Distance between short and long strikes per side
+  min_dte: 20
+  max_dte: 30
+  profit_target_pct: 50
+  time_stop_rule: 5dte
+
+jade_lizard:
+  enabled: true
+  category: SELLING
+  min_capital_tier: PRO
+  allowed_segments: [NSE_INDEX, NSE_FO]
+  min_iv_rank: 45
+  min_dte: 15
+  max_dte: 25
+  stop_loss_credit_multiple: 2.0
+  profit_target_pct: 50
+  time_stop_rule: 3dte
+
+covered_call:
+  enabled: true
+  category: SELLING
+  min_capital_tier: PRO
+  allowed_segments: [NSE_FO]  # Equity futures only (not index — too expensive)
+  min_iv_rank: 35
+  covered_call_otm_strikes: 2 # Sell call 2 strikes OTM
+  min_dte: 15
+  max_dte: 30
+  futures_stop_loss_pct: 3.0  # Close both legs if futures drop > 3%
+  profit_target_pct: 80       # Buy back call at 80% decay
+  time_stop_rule: 5dte_roll   # Roll to next month at 5 DTE
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Capital tier configuration
+# ═══════════════════════════════════════════════════════════════════════════════
+
+capital_tiers:
+  STARTER:
+    min_capital_inr: 10000
+    max_capital_inr: 50000
+    allowed_categories: [BUYING]
+    max_custom_strategies: 1
+    max_symbols_per_custom: 2
+  GROWTH:
+    min_capital_inr: 50001
+    max_capital_inr: 200000
+    allowed_categories: [BUYING, HYBRID]
+    max_custom_strategies: 3
+    max_symbols_per_custom: 3
+  PRO:
+    min_capital_inr: 200001
+    max_capital_inr: 1000000
+    allowed_categories: [BUYING, HYBRID, SELLING]
+    max_custom_strategies: 10
+    max_symbols_per_custom: 10
+  INSTITUTIONAL:
+    min_capital_inr: 1000001
+    allowed_categories: [BUYING, HYBRID, SELLING]
+    max_custom_strategies: 20
+    max_symbols_per_custom: -1  # Unlimited

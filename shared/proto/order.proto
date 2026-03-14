@@ -1,0 +1,56 @@
+syntax = "proto3";
+
+package resolute;
+
+option go_package = "github.com/resolute/india-options-builder/shared/proto";
+
+import "google/protobuf/timestamp.proto";
+
+message Order {
+    string id = 1;                              // UUID
+    string tenant_id = 2;                       // UUID — owner
+    string signal_id = 3;
+    optional string broker_order_id = 4;
+    OrderLeg leg = 5;                           // From signal.proto
+    string status = 6;                          // "PENDING" | "OPEN" | "COMPLETE" | "REJECTED" | "CANCELLED"
+    optional double fill_price = 7;
+    optional google.protobuf.Timestamp fill_time = 8;
+    optional string error = 9;
+}
+
+message Position {
+    string id = 1;                              // UUID
+    string tenant_id = 2;
+    string strategy_name = 3;
+    string underlying = 4;
+    repeated Order legs = 5;
+    google.protobuf.Timestamp entry_time = 6;
+    double entry_cost_inr = 7;
+    double current_value_inr = 8;
+    double unrealised_pnl_inr = 9;
+    double realised_pnl_inr = 10;
+    double stop_loss_price = 11;
+    double target_price = 12;
+    google.protobuf.Timestamp time_stop = 13;
+    string status = 14;                         // "OPEN" | "CLOSED" | "STOP_HIT" | "TIME_STOP" | "TARGET_HIT"
+    PositionGreeks greeks = 15;
+}
+
+message PositionGreeks {
+    double delta = 1;
+    double gamma = 2;
+    double theta = 3;
+    double vega = 4;
+    double net_premium = 5;
+}
+
+message FillConfirmation {
+    string order_id = 1;
+    string tenant_id = 2;
+    string broker_order_id = 3;
+    string status = 4;                          // "COMPLETE" | "REJECTED" | "CANCELLED"
+    double fill_price = 5;
+    int32 filled_qty = 6;
+    google.protobuf.Timestamp fill_time = 7;
+    optional string error = 8;
+}

@@ -1,0 +1,62 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+.eggs/
+*.egg
+.venv/
+venv/
+env/
+
+# Go
+*.exe
+*.dll
+*.so
+*.dylib
+vendor/
+
+# Node / Frontend
+node_modules/
+.next/
+out/
+.turbo/
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Docker
+timescaledb_data/
+
+# Test / Coverage
+htmlcov/
+.coverage
+.pytest_cache/
+coverage.xml
+*.cover
+
+# Certs (generated)
+certs/*.pem
+certs/*.key
+
+# Backtest data (large)
+tests/backtest/data/*.parquet
+
+# Logs
+*.log
+logs/

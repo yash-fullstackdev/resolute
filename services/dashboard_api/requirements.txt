@@ -1,0 +1,33 @@
+# FastAPI + ASGI server
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+
+# Database
+sqlalchemy[asyncio]==2.0.36
+asyncpg==0.30.0
+
+# Authentication
+PyJWT==2.10.1
+
+# Redis
+redis[hiredis]==5.2.1
+
+# NATS
+nats-py==2.9.0
+
+# Rate limiting
+slowapi==0.1.9
+
+# Validation
+pydantic==2.10.4
+pydantic[email]
+
+# Observability
+structlog==24.4.0
+prometheus-client==0.21.1
+
+# ASGI middleware
+starlette==0.41.3
+
+# Timezone support (stdlib in 3.9+)
+tzdata==2024.2

@@ -1,0 +1,14 @@
+feed_gateway:
+  broker: paper              # zerodha | dhan | paper
+  api_key: ${BROKER_API_KEY}
+  access_token: ${BROKER_ACCESS_TOKEN}
+  nats_url: nats://localhost:4222
+  reconnect_max_wait: 30s
+  stale_feed_timeout: 30s
+  symbols:
+    - NIFTY
+    - BANKNIFTY
+    - FINNIFTY
+    - MCX:GOLD
+    - MCX:CRUDEOIL
+    - MCX:SILVER
