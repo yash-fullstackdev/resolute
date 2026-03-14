@@ -12,8 +12,8 @@ RUN apt-get update && \
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy application code
-COPY . .
+# Copy application code into package directory so `python -m user_worker_pool.main` works
+COPY . ./user_worker_pool/
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
@@ -23,4 +23,4 @@ HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
 EXPOSE 9093
 
 # Run the service
-CMD ["python", "-m", "main"]
+CMD ["python", "-m", "user_worker_pool.main"]

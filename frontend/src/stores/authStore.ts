@@ -28,16 +28,32 @@ export const useAuthStore = create<AuthState>((set) => ({
     set({ isLoading: true });
     try {
       const response = await authClient.post("/login", { email, password });
-      const data = response.data as { access_token: string; refresh_token: string; user: User };
-      const tokenPair: TokenPair = {
+      const data = response.data as {
+        access_token: string;
+        refresh_token: string;
+        tenant_id: string;
+        tier: string;
+        expires_at: string;
+      };
+      setTokens({
         access_token: data.access_token,
         refresh_token: data.refresh_token,
-      };
-      setTokens(tokenPair);
+      });
       set({
-        user: data.user,
+        user: {
+          id: data.tenant_id,
+          tenant_id: data.tenant_id,
+          email,
+          full_name: "",
+          capital_tier: data.tier as CapitalTier,
+          is_active: true,
+          is_verified: true,
+          broker_connected: false,
+          created_at: "",
+          updated_at: "",
+        },
         isAuthenticated: true,
-        tier: data.user.capital_tier,
+        tier: data.tier as CapitalTier,
         isLoading: false,
       });
     } catch {
@@ -52,7 +68,7 @@ export const useAuthStore = create<AuthState>((set) => ({
       await authClient.post("/register", {
         email,
         password,
-        full_name: fullName,
+        name: fullName,
       });
       set({ isLoading: false });
     } catch {

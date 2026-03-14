@@ -48,33 +48,52 @@ async def list_signals(
     """Get recent signals for the authenticated tenant (last 100 by default)."""
     tenant_id = request.state.tenant_id
 
-    async with rls_session(tenant_id) as session:
-        query = "SELECT * FROM signals WHERE tenant_id = :tenant_id"
-        params: dict = {"tenant_id": tenant_id}
+    try:
+        async with rls_session(tenant_id) as session:
+            query = "SELECT * FROM signals WHERE tenant_id = :tenant_id"
+            params: dict = {"tenant_id": tenant_id}
 
-        if strategy_name:
-            query += " AND strategy_name = :strategy_name"
-            params["strategy_name"] = strategy_name
+            if strategy_name:
+                query += " AND strategy = :strategy_name"
+                params["strategy_name"] = strategy_name
 
-        if underlying:
-            query += " AND underlying = :underlying"
-            params["underlying"] = underlying
+            if underlying:
+                query += " AND underlying = :underlying"
+                params["underlying"] = underlying
 
-        if direction:
-            query += " AND direction = :direction"
-            params["direction"] = direction
+            if direction:
+                query += " AND direction = :direction"
+                params["direction"] = direction
 
-        query += " ORDER BY timestamp DESC LIMIT :limit"
-        params["limit"] = limit
+            query += " ORDER BY time DESC LIMIT :limit"
+            params["limit"] = limit
 
-        result = await session.execute(text(query), params)
-        rows = result.mappings().all()
+            result = await session.execute(text(query), params)
+            rows = result.mappings().all()
+    except Exception as exc:
+        logger.warning("signals_query_failed", tenant_id=tenant_id, error=str(exc))
+        rows = []
+
+    def _map_signal(r: dict) -> dict:
+        legs = r.get("legs") or []
+        return {
+            "id": str(r["id"]),
+            "strategy_name": r.get("strategy", ""),
+            "underlying": r.get("underlying", ""),
+            "direction": r.get("direction", ""),
+            "strength": r.get("strength") or 0.0,
+            "regime": r.get("regime") or "UNKNOWN",
+            "legs": legs if isinstance(legs, list) else [],
+            "rationale": r.get("rationale") or "",
+            "created_at": r["time"].isoformat() if r.get("time") else "",
+            "executed": r.get("acted_upon") or False,
+        }
 
     logger.info("signals_listed", tenant_id=tenant_id, count=len(rows))
 
     return {
-        "signals": [dict(r) for r in rows],
-        "total": len(rows),
+        "success": True,
+        "data": [_map_signal(dict(r)) for r in rows],
     }
 
 

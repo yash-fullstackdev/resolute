@@ -10,8 +10,8 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir -r requirements.txt
 
-# Copy application code
-COPY . .
+# Copy application code into package directory so `python -m dashboard_api.main` works
+COPY . ./dashboard_api/
 
 # Ownership
 RUN chown -R appuser:appuser /app

@@ -18,7 +18,7 @@ services:
     networks:
       - options-net
     healthcheck:
-      test: ["CMD", "nats-server", "--signal", "ldm"]
+      test: ["CMD", "sh", "-c", "wget -q --spider http://localhost:8222/healthz || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 5

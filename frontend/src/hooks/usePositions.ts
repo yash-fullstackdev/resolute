@@ -22,8 +22,8 @@ export function useExitPosition() {
 
   return useMutation({
     mutationFn: async (positionId: string) => {
-      const response = await apiClient.post<ApiResponse<Position>>(
-        `/positions/${positionId}/exit`
+      const response = await apiClient.delete<ApiResponse<Position>>(
+        `/positions/${positionId}`
       );
       return response.data.data;
     },

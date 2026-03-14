@@ -62,7 +62,7 @@ async def list_positions(
             params["underlying"] = underlying
 
         if strategy_name:
-            query += " AND strategy_name = :strategy_name"
+            query += " AND strategy = :strategy_name"
             params["strategy_name"] = strategy_name
 
         query += " ORDER BY entry_time DESC LIMIT :limit OFFSET :offset"
@@ -72,32 +72,35 @@ async def list_positions(
         result = await session.execute(text(query), params)
         rows = result.mappings().all()
 
-        # Count total
-        count_query = "SELECT COUNT(*) FROM positions WHERE tenant_id = :tenant_id"
-        count_params: dict = {"tenant_id": tenant_id}
-        if status:
-            count_query += " AND status = :status"
-            count_params["status"] = status
-        if underlying:
-            count_query += " AND underlying = :underlying"
-            count_params["underlying"] = underlying
-        if strategy_name:
-            count_query += " AND strategy_name = :strategy_name"
-            count_params["strategy_name"] = strategy_name
+    def _map_position(r: dict) -> dict:
+        legs = r.get("legs") or []
+        return {
+            "id": str(r["id"]),
+            "tenant_id": str(r["tenant_id"]),
+            "strategy_name": r.get("strategy", ""),
+            "underlying": r.get("underlying", ""),
+            "direction": r.get("segment", ""),
+            "status": r.get("status", "OPEN"),
+            "legs": legs if isinstance(legs, list) else [],
+            "entry_time": r["entry_time"].isoformat() if r.get("entry_time") else "",
+            "exit_time": r["exit_time"].isoformat() if r.get("exit_time") else None,
+            "total_pnl": r.get("realised_pnl_inr") or 0.0,
+            "total_pnl_pct": 0.0,
+            "unrealized_pnl": 0.0 if r.get("status") == "OPEN" else (r.get("realised_pnl_inr") or 0.0),
+            "realized_pnl": r.get("realised_pnl_inr") or 0.0,
+            "stop_loss": r.get("stop_loss_price"),
+            "target": r.get("target_price"),
+            "capital_deployed": r.get("entry_cost_inr") or 0.0,
+            "max_drawdown": 0.0,
+            "created_at": r["entry_time"].isoformat() if r.get("entry_time") else "",
+            "updated_at": r["exit_time"].isoformat() if r.get("exit_time") else "",
+        }
 
-        count_result = await session.execute(text(count_query), count_params)
-        total = count_result.scalar() or 0
-
-    logger.info(
-        "positions_listed",
-        tenant_id=tenant_id,
-        count=len(rows),
-        total=total,
-    )
+    logger.info("positions_listed", tenant_id=tenant_id, count=len(rows))
 
     return {
-        "positions": [dict(r) for r in rows],
-        "total": total,
+        "success": True,
+        "data": [_map_position(dict(r)) for r in rows],
     }
 
 

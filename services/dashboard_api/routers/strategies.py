@@ -233,6 +233,68 @@ INDICATOR_LIBRARY = [
 ]
 
 
+@router.get("")
+async def list_strategies(request: Request):
+    """List all built-in and custom strategies for the current user."""
+    tenant_id = request.state.tenant_id
+    tier = request.state.tier
+
+    built_in = [
+        {"id": "long_call", "name": "Long Call", "category": "BUYING", "type": "BUILT_IN", "enabled": False, "min_tier": "STARTER"},
+        {"id": "long_put", "name": "Long Put", "category": "BUYING", "type": "BUILT_IN", "enabled": False, "min_tier": "STARTER"},
+        {"id": "long_straddle", "name": "Long Straddle", "category": "BUYING", "type": "BUILT_IN", "enabled": False, "min_tier": "STARTER"},
+        {"id": "long_strangle", "name": "Long Strangle", "category": "BUYING", "type": "BUILT_IN", "enabled": False, "min_tier": "STARTER"},
+        {"id": "bull_call_spread", "name": "Bull Call Spread", "category": "BUYING", "type": "BUILT_IN", "enabled": False, "min_tier": "STARTER"},
+        {"id": "bear_put_spread", "name": "Bear Put Spread", "category": "BUYING", "type": "BUILT_IN", "enabled": False, "min_tier": "STARTER"},
+        {"id": "rsi_reversal", "name": "RSI Reversal Buyer", "category": "BUYING", "type": "BUILT_IN", "enabled": False, "min_tier": "STARTER"},
+        {"id": "supertrend_momentum", "name": "SuperTrend Momentum", "category": "BUYING", "type": "BUILT_IN", "enabled": False, "min_tier": "STARTER"},
+        {"id": "covered_call", "name": "Covered Call", "category": "HYBRID", "type": "BUILT_IN", "enabled": False, "min_tier": "GROWTH"},
+        {"id": "collar", "name": "Collar", "category": "HYBRID", "type": "BUILT_IN", "enabled": False, "min_tier": "GROWTH"},
+        {"id": "protective_put", "name": "Protective Put", "category": "HYBRID", "type": "BUILT_IN", "enabled": False, "min_tier": "GROWTH"},
+        {"id": "short_straddle", "name": "Short Straddle", "category": "SELLING", "type": "BUILT_IN", "enabled": False, "min_tier": "PRO"},
+        {"id": "short_strangle", "name": "Short Strangle", "category": "SELLING", "type": "BUILT_IN", "enabled": False, "min_tier": "PRO"},
+        {"id": "iron_condor", "name": "Iron Condor", "category": "SELLING", "type": "BUILT_IN", "enabled": False, "min_tier": "PRO"},
+        {"id": "iron_butterfly", "name": "Iron Butterfly", "category": "SELLING", "type": "BUILT_IN", "enabled": False, "min_tier": "PRO"},
+        {"id": "jade_lizard", "name": "Jade Lizard", "category": "SELLING", "type": "BUILT_IN", "enabled": False, "min_tier": "PRO"},
+        {"id": "ratio_spread", "name": "Ratio Spread", "category": "SELLING", "type": "BUILT_IN", "enabled": False, "min_tier": "PRO"},
+        {"id": "calendar_spread", "name": "Calendar Spread", "category": "SELLING", "type": "BUILT_IN", "enabled": False, "min_tier": "PRO"},
+    ]
+
+    return {"data": built_in}
+
+
+@router.patch("/{strategy_id}")
+async def toggle_strategy(request: Request, strategy_id: str):
+    """Toggle a built-in strategy's enabled state (stub)."""
+    from pydantic import BaseModel
+
+    class ToggleBody(BaseModel):
+        enabled: bool
+
+    body_bytes = await request.body()
+    body = ToggleBody.model_validate_json(body_bytes)
+
+    return {
+        "success": True,
+        "data": {
+            "id": strategy_id,
+            "enabled": body.enabled,
+        },
+    }
+
+
+@router.post("/ai/chat")
+async def ai_chat(request: Request):
+    """Stub for AI strategy chat — not available in local dev."""
+    return {
+        "success": True,
+        "data": {
+            "message": "AI strategy building is not available in local development mode.",
+            "suggestions": [],
+        },
+    }
+
+
 @router.get("/indicators")
 async def list_indicators(request: Request):
     """List all available indicators with their parameter schemas."""

@@ -47,7 +47,7 @@ from ..models.schemas import (
 )
 
 logger = structlog.get_logger(service="auth_service")
-router = APIRouter(prefix="/auth", tags=["auth"])
+router = APIRouter(prefix="/auth/v1", tags=["auth"])
 
 limiter = Limiter(key_func=get_remote_address)
 
@@ -187,7 +187,7 @@ async def register(
             INSERT INTO tenants (id, email, name, password_hash, subscription_tier,
                 subscription_status, trial_ends_at, created_at, is_active, email_verified)
             VALUES (:id, :email, :name, :pw_hash, 'SIGNAL', 'TRIAL', :trial_ends,
-                :created_at, true, false)
+                :created_at, true, true)
             """
         ),
         {
@@ -237,6 +237,11 @@ async def login(
         {"email": body.email},
     )
     tenant = result.fetchone()
+
+    # Convert UUID fields to str for JSON serialization
+    if tenant is not None:
+        tenant = tenant._mapping
+        tenant = type("Tenant", (), {k: (str(v) if isinstance(v, uuid.UUID) else v) for k, v in tenant.items()})()
 
     if not tenant:
         await _audit_log(

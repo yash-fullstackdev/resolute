@@ -35,8 +35,8 @@ RUN apt-get update && \
 COPY --from=base /usr/local/lib/python3.12/site-packages /usr/local/lib/python3.12/site-packages
 COPY --from=base /usr/local/bin /usr/local/bin
 
-# Copy application code
-COPY . .
+# Copy application code into package directory so `python -m auth_service.main` works
+COPY . ./auth_service/
 
 # Create a non-root user
 RUN groupadd -r appuser && useradd -r -g appuser -s /sbin/nologin appuser
@@ -47,4 +47,4 @@ EXPOSE 8001
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
     CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8001/health')" || exit 1
 
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8001", "--workers", "2", "--loop", "uvloop", "--http", "httptools"]
+CMD ["uvicorn", "auth_service.main:app", "--host", "0.0.0.0", "--port", "8001", "--workers", "2", "--loop", "uvloop", "--http", "httptools"]

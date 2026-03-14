@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef } from "react";
-import { wsClient, type WSEventType } from "@/lib/websocket";
+import { wsClient, type WSEventType, type EventHandler } from "@/lib/websocket";
 import { useLiveDataStore } from "@/stores/liveDataStore";
 import { useUIStore } from "@/stores/uiStore";
 import type { Position, Signal } from "@/types/trading";
@@ -95,7 +95,7 @@ export function useWebSocket() {
 
 export function useWSEvent<T extends WSEventType>(
   eventType: T,
-  handler: (data: Extract<import("@/lib/websocket").WSEvent, { type: T }>["data"]) => void
+  handler: EventHandler<T>
 ) {
   useEffect(() => {
     const unsub = wsClient.on(eventType, handler);

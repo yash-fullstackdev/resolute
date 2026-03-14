@@ -48,36 +48,44 @@ async def get_discipline_score(request: Request):
     """Get the authenticated user's rolling discipline score (0–100)."""
     tenant_id = request.state.tenant_id
 
-    async with rls_session(tenant_id) as session:
-        result = await session.execute(
-            text("""
-                SELECT score, components, trend, last_updated
-                FROM discipline_scores
-                WHERE tenant_id = :tenant_id
-                ORDER BY last_updated DESC
-                LIMIT 1
-            """),
-            {"tenant_id": tenant_id},
-        )
-        row = result.mappings().first()
+    try:
+        async with rls_session(tenant_id) as session:
+            result = await session.execute(
+                text("""
+                    SELECT score, components, trend, last_updated
+                    FROM discipline_scores
+                    WHERE tenant_id = :tenant_id
+                    ORDER BY last_updated DESC
+                    LIMIT 1
+                """),
+                {"tenant_id": tenant_id},
+            )
+            row = result.mappings().first()
+    except Exception as exc:
+        logger.warning("discipline_scores_query_failed", tenant_id=tenant_id, error=str(exc))
+        row = None
 
     if not row:
         return {
-            "tenant_id": tenant_id,
-            "score": 100.0,
-            "components": {},
-            "trend": "STABLE",
-            "last_updated": datetime.now(timezone.utc).isoformat(),
+            "success": True,
+            "data": {
+                "score": 100.0,
+                "components": {},
+                "trend": "STABLE",
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            },
         }
 
     logger.info("discipline_score_retrieved", tenant_id=tenant_id, score=row["score"])
 
     return {
-        "tenant_id": tenant_id,
-        "score": float(row["score"]),
-        "components": row["components"] if isinstance(row["components"], dict) else {},
-        "trend": row["trend"],
-        "last_updated": row["last_updated"].isoformat() if row["last_updated"] else None,
+        "success": True,
+        "data": {
+            "score": float(row["score"]),
+            "components": row["components"] if isinstance(row["components"], dict) else {},
+            "trend": row["trend"],
+            "updated_at": row["last_updated"].isoformat() if row["last_updated"] else None,
+        },
     }
 
 
@@ -86,37 +94,49 @@ async def get_circuit_breaker(request: Request):
     """Get the authenticated user's circuit breaker state."""
     tenant_id = request.state.tenant_id
 
-    async with rls_session(tenant_id) as session:
-        result = await session.execute(
-            text("""
-                SELECT is_halted, halted_at, halt_reason, reset_at,
-                       daily_loss_inr, daily_loss_limit_inr
-                FROM circuit_breaker_state
-                WHERE tenant_id = :tenant_id
-            """),
-            {"tenant_id": tenant_id},
-        )
-        row = result.mappings().first()
+    try:
+        async with rls_session(tenant_id) as session:
+            result = await session.execute(
+                text("""
+                    SELECT is_halted, halted_at, halt_reason, reset_at,
+                           daily_loss_inr, daily_loss_limit_inr
+                    FROM circuit_breaker_state
+                    WHERE tenant_id = :tenant_id
+                """),
+                {"tenant_id": tenant_id},
+            )
+            row = result.mappings().first()
+    except Exception as exc:
+        logger.warning("circuit_breaker_query_failed", tenant_id=tenant_id, error=str(exc))
+        row = None
 
     if not row:
         return {
-            "tenant_id": tenant_id,
-            "is_halted": False,
-            "halted_at": None,
-            "halt_reason": None,
-            "reset_at": None,
-            "daily_loss_inr": 0.0,
-            "daily_loss_limit_inr": 0.0,
+            "success": True,
+            "data": {
+                "status": "ACTIVE",
+                "reason": None,
+                "halted_at": None,
+                "resume_at": None,
+                "daily_loss": 0.0,
+                "daily_loss_limit": 0.0,
+                "consecutive_losses": 0,
+                "max_consecutive_losses": 5,
+            },
         }
 
     return {
-        "tenant_id": tenant_id,
-        "is_halted": row["is_halted"],
-        "halted_at": row["halted_at"].isoformat() if row["halted_at"] else None,
-        "halt_reason": row["halt_reason"],
-        "reset_at": row["reset_at"].isoformat() if row["reset_at"] else None,
-        "daily_loss_inr": float(row["daily_loss_inr"]),
-        "daily_loss_limit_inr": float(row["daily_loss_limit_inr"]),
+        "success": True,
+        "data": {
+            "status": "HALTED" if row["is_halted"] else "ACTIVE",
+            "reason": row["halt_reason"],
+            "halted_at": row["halted_at"].isoformat() if row["halted_at"] else None,
+            "resume_at": row["reset_at"].isoformat() if row["reset_at"] else None,
+            "daily_loss": float(row["daily_loss_inr"]),
+            "daily_loss_limit": float(row["daily_loss_limit_inr"]),
+            "consecutive_losses": 0,
+            "max_consecutive_losses": 5,
+        },
     }
 
 
@@ -148,8 +168,8 @@ async def list_overrides(
         total = count_result.scalar() or 0
 
     return {
-        "overrides": [dict(r) for r in rows],
-        "total": total,
+        "success": True,
+        "data": [dict(r) for r in rows],
     }
 
 

@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { useMutation } from "@tanstack/react-query";
-import { apiClient } from "@/lib/api";
+import { apiClient, authClient } from "@/lib/api";
 import { useAuthStore } from "@/stores/authStore";
 import { TIER_NAMES, TIER_COLORS } from "@/lib/constants";
 import { User, Link2, CreditCard, Save, Check, AlertCircle } from "lucide-react";
@@ -23,7 +23,7 @@ export default function SettingsPage() {
 
   const brokerMutation = useMutation({
     mutationFn: async () => {
-      await apiClient.post("/user/broker/connect", {
+      await authClient.post("/broker/connect", {
         api_key: brokerApiKey,
         api_secret: brokerApiSecret,
       });

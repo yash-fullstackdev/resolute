@@ -17,7 +17,7 @@ export type WSEvent =
 
 export type WSEventType = WSEvent["type"];
 
-type EventHandler<T extends WSEventType> = (
+export type EventHandler<T extends WSEventType> = (
   data: Extract<WSEvent, { type: T }>["data"]
 ) => void;
 

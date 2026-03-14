@@ -15,8 +15,8 @@ RUN apt-get update && \
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy application code
-COPY . .
+# Copy application code into package directory so `python -m signal_engine.main` works
+COPY . ./signal_engine/
 
 # Expose Prometheus metrics port
 EXPOSE 9091

@@ -44,7 +44,7 @@ export default function PerformancePage() {
   const { data: stats } = useQuery<PerformanceStats>({
     queryKey: ["performance-stats", period],
     queryFn: async () => {
-      const res = await apiClient.get<ApiResponse<PerformanceStats>>("/performance/stats", {
+      const res = await apiClient.get<ApiResponse<PerformanceStats>>("/performance", {
         params: { days: daysMap[period] },
       });
       return res.data.data;
@@ -54,7 +54,7 @@ export default function PerformancePage() {
   const { data: dailyPnl } = useQuery<DailyPnLEntry[]>({
     queryKey: ["daily-pnl", period],
     queryFn: async () => {
-      const res = await apiClient.get<ApiResponse<DailyPnLEntry[]>>("/performance/daily-pnl", {
+      const res = await apiClient.get<ApiResponse<DailyPnLEntry[]>>("/performance/daily", {
         params: { days: daysMap[period] },
       });
       return res.data.data;

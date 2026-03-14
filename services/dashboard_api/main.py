@@ -48,6 +48,7 @@ from .routers import (
     reports,
     signals,
     strategies,
+    user,
 )
 
 # ── Structlog Configuration ─────────────────────────────────────────────────
@@ -292,31 +293,31 @@ app = FastAPI(
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
-# ── Middleware (order matters: outermost first) ──────────────────────────────
+# ── Middleware (order matters: last added = outermost = runs first) ───────────
 
-# CORS — must be outermost
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=ALLOWED_ORIGINS,
-    allow_credentials=True,
-    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
-    allow_headers=["Authorization", "Content-Type", "X-CSRF-Token", "X-Request-ID"],
-)
-
-# Security headers
-app.add_middleware(SecurityHeadersMiddleware)
-
-# Request logging + metrics (before auth so we log all requests)
-app.add_middleware(RequestLoggingMiddleware)
-
-# Subscription tier gating (after auth, uses request.state.tier)
-app.add_middleware(SubscriptionTierMiddleware)
+# CSRF protection (innermost)
+app.add_middleware(CSRFMiddleware)
 
 # JWT authentication (sets request.state.tenant_id, .email, .tier)
 app.add_middleware(JWTAuthMiddleware)
 
-# CSRF protection
-app.add_middleware(CSRFMiddleware)
+# Subscription tier gating (after auth, uses request.state.tier)
+app.add_middleware(SubscriptionTierMiddleware)
+
+# Request logging + metrics (before auth so we log all requests)
+app.add_middleware(RequestLoggingMiddleware)
+
+# Security headers
+app.add_middleware(SecurityHeadersMiddleware)
+
+# CORS — must be outermost (added last so it runs first, handles OPTIONS preflight)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=ALLOWED_ORIGINS,
+    allow_credentials=True,
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type", "X-CSRF-Token", "X-Request-ID"],
+)
 
 
 # ── Routers ──────────────────────────────────────────────────────────────────
@@ -333,6 +334,7 @@ app.include_router(reports.router)
 app.include_router(chain.router)
 app.include_router(strategies.router)
 app.include_router(admin.router)
+app.include_router(user.router)
 
 
 # ── Prometheus Metrics Endpoint ──────────────────────────────────────────────

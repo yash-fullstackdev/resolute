@@ -2,7 +2,8 @@
  * Format a number in Indian numbering system with INR symbol.
  * e.g. 100000 => "₹1,00,000"
  */
-export function formatINR(value: number, showSign = false): string {
+export function formatINR(value: number | undefined | null, showSign = false): string {
+  if (value == null) return "₹0";
   const absValue = Math.abs(value);
   const formatted = absValue.toLocaleString("en-IN", {
     maximumFractionDigits: 2,
@@ -16,7 +17,8 @@ export function formatINR(value: number, showSign = false): string {
  * Format percentage with sign.
  * e.g. 0.38 => "+38.00%"
  */
-export function formatPercentage(value: number, decimals = 2): string {
+export function formatPercentage(value: number | undefined | null, decimals = 2): string {
+  if (value == null) return "0.00%";
   const sign = value >= 0 ? "+" : "";
   return `${sign}${value.toFixed(decimals)}%`;
 }
@@ -72,7 +74,8 @@ export function formatDateOnlyIST(dateStr: string): string {
 /**
  * Get P&L color class based on value.
  */
-export function pnlColorClass(value: number): string {
+export function pnlColorClass(value: number | undefined | null): string {
+  if (value == null) return "text-slate-400";
   if (value > 0) return "text-profit";
   if (value < 0) return "text-loss";
   return "text-slate-400";
@@ -81,7 +84,8 @@ export function pnlColorClass(value: number): string {
 /**
  * Get P&L background color class based on value.
  */
-export function pnlBgClass(value: number): string {
+export function pnlBgClass(value: number | undefined | null): string {
+  if (value == null) return "bg-slate-700/50 text-slate-400";
   if (value > 0) return "bg-profit/10 text-profit";
   if (value < 0) return "bg-loss/10 text-loss";
   return "bg-slate-700/50 text-slate-400";

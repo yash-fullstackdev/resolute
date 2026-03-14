@@ -6,6 +6,7 @@ every tenant-scoped query for RLS double enforcement.
 """
 
 import os
+import re
 import time
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator
@@ -69,9 +70,12 @@ async def rls_session(tenant_id: str) -> AsyncGenerator[AsyncSession, None]:
     """
     async with async_session_factory() as session:
         async with session.begin():
+            # SET doesn't support parameterized queries in asyncpg;
+            # validate UUID format to prevent SQL injection, then use literal
+            if not re.match(r'^[0-9a-f\-]{36}$', tenant_id):
+                raise ValueError(f"Invalid tenant_id format: {tenant_id}")
             await session.execute(
-                text("SET LOCAL app.current_tenant_id = :tid"),
-                {"tid": tenant_id},
+                text(f"SET LOCAL app.current_tenant_id = '{tenant_id}'")
             )
             logger.debug("rls_context_set", tenant_id=tenant_id)
             try:

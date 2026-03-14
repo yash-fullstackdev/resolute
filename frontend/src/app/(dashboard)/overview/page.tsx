@@ -49,7 +49,7 @@ export default function OverviewPage() {
     queryKey: ["pnl-history-7d"],
     queryFn: async () => {
       const res = await apiClient.get<ApiResponse<Array<{ date: string; pnl: number }>>>(
-        "/performance/daily-pnl",
+        "/performance/daily",
         { params: { days: 7 } }
       );
       return res.data.data;

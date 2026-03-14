@@ -74,7 +74,18 @@ async def get_todays_plan(request: Request):
         return _error("NOT_FOUND", "No plan for today. Create one before market open.", 404)
 
     logger.info("plan_retrieved", tenant_id=tenant_id, date=str(today))
-    return dict(row)
+    plan = dict(row)
+    return {
+        "success": True,
+        "data": {
+            **plan,
+            "thesis": plan.get("notes", ""),
+            "is_locked": plan.get("status") == "LOCKED",
+            "max_trades": plan.get("max_trades_per_day"),
+            "daily_loss_limit": plan.get("daily_loss_limit_inr"),
+            "daily_profit_target": plan.get("daily_profit_target_inr"),
+        },
+    }
 
 
 @router.post("")

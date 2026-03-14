@@ -18,7 +18,7 @@ export default function PlanPage() {
     queryKey: ["today-plan"],
     queryFn: async () => {
       try {
-        const res = await apiClient.get<ApiResponse<TradingPlan>>("/plan/today");
+        const res = await apiClient.get<ApiResponse<TradingPlan>>("/plan");
         return res.data.data;
       } catch {
         return null;
@@ -37,10 +37,10 @@ export default function PlanPage() {
     if (plan) {
       setEnabledStrategies(plan.enabled_strategies);
       setActiveUnderlyings(plan.active_underlyings);
-      setMaxTrades(plan.max_trades);
-      setDailyLossLimit(plan.daily_loss_limit);
-      setDailyProfitTarget(plan.daily_profit_target ?? 10000);
-      setThesis(plan.thesis);
+      setMaxTrades(plan.max_trades_per_day ?? plan.max_trades);
+      setDailyLossLimit(plan.daily_loss_limit_inr ?? plan.daily_loss_limit);
+      setDailyProfitTarget(plan.daily_profit_target_inr ?? plan.daily_profit_target ?? 10000);
+      setThesis(plan.notes ?? plan.thesis ?? "");
     }
   }, [plan]);
 
@@ -49,14 +49,12 @@ export default function PlanPage() {
       const payload = {
         enabled_strategies: enabledStrategies,
         active_underlyings: activeUnderlyings,
-        max_trades: maxTrades,
-        daily_loss_limit: dailyLossLimit,
-        daily_profit_target: dailyProfitTarget,
-        thesis,
+        max_trades_per_day: maxTrades,
+        daily_loss_limit_inr: dailyLossLimit,
+        daily_profit_target_inr: dailyProfitTarget,
+        notes: thesis,
       };
-      const method = plan ? "put" : "post";
-      const url = plan ? `/plan/${plan.id}` : "/plan";
-      await apiClient[method](url, payload);
+      await apiClient.post("/plan", payload);
     },
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ["today-plan"] });
@@ -65,7 +63,7 @@ export default function PlanPage() {
 
   const lockMutation = useMutation({
     mutationFn: async () => {
-      await apiClient.post(`/plan/${plan?.id}/lock`);
+      await apiClient.post("/plan/lock");
     },
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ["today-plan"] });
