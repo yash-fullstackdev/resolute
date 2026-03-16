@@ -64,7 +64,7 @@ async def get_todays_plan(request: Request):
         result = await session.execute(
             text("""
                 SELECT * FROM trading_plans
-                WHERE tenant_id = :tenant_id AND date = :today
+                WHERE tenant_id = :tenant_id AND plan_date = :today
             """),
             {"tenant_id": tenant_id, "today": today},
         )
@@ -103,7 +103,7 @@ async def create_or_update_plan(request: Request, body: TradingPlanInput):
         existing = await session.execute(
             text("""
                 SELECT status FROM trading_plans
-                WHERE tenant_id = :tenant_id AND date = :today
+                WHERE tenant_id = :tenant_id AND plan_date = :today
             """),
             {"tenant_id": tenant_id, "today": today},
         )
@@ -121,14 +121,14 @@ async def create_or_update_plan(request: Request, body: TradingPlanInput):
             await session.execute(
                 text("""
                     UPDATE trading_plans
-                    SET enabled_strategies = :enabled_strategies::jsonb,
-                        active_underlyings = :active_underlyings::jsonb,
+                    SET enabled_strategies = CAST(:enabled_strategies AS jsonb),
+                        active_underlyings = CAST(:active_underlyings AS jsonb),
                         max_trades_per_day = :max_trades_per_day,
                         daily_loss_limit_inr = :daily_loss_limit_inr,
                         daily_profit_target_inr = :daily_profit_target_inr,
                         notes = :notes,
                         updated_at = NOW()
-                    WHERE tenant_id = :tenant_id AND date = :today
+                    WHERE tenant_id = :tenant_id AND plan_date = :today
                 """),
                 {
                     "tenant_id": tenant_id,
@@ -149,13 +149,13 @@ async def create_or_update_plan(request: Request, body: TradingPlanInput):
             await session.execute(
                 text("""
                     INSERT INTO trading_plans
-                        (id, tenant_id, date, status, enabled_strategies,
+                        (id, tenant_id, plan_date, status, enabled_strategies,
                          active_underlyings, max_trades_per_day,
                          daily_loss_limit_inr, daily_profit_target_inr,
                          notes, created_at, updated_at)
                     VALUES
-                        (:id, :tenant_id, :today, 'DRAFT', :enabled_strategies::jsonb,
-                         :active_underlyings::jsonb, :max_trades_per_day,
+                        (:id, :tenant_id, :today, 'DRAFT', CAST(:enabled_strategies AS jsonb),
+                         CAST(:active_underlyings AS jsonb), :max_trades_per_day,
                          :daily_loss_limit_inr, :daily_profit_target_inr,
                          :notes, NOW(), NOW())
                 """),
@@ -188,7 +188,7 @@ async def lock_plan(request: Request):
         result = await session.execute(
             text("""
                 SELECT id, status FROM trading_plans
-                WHERE tenant_id = :tenant_id AND date = :today
+                WHERE tenant_id = :tenant_id AND plan_date = :today
             """),
             {"tenant_id": tenant_id, "today": today},
         )
@@ -204,7 +204,7 @@ async def lock_plan(request: Request):
             text("""
                 UPDATE trading_plans
                 SET status = 'LOCKED', locked_at = NOW(), updated_at = NOW()
-                WHERE tenant_id = :tenant_id AND date = :today
+                WHERE tenant_id = :tenant_id AND plan_date = :today
             """),
             {"tenant_id": tenant_id, "today": today},
         )
@@ -243,7 +243,7 @@ async def get_plan_history(
             text("""
                 SELECT * FROM trading_plans
                 WHERE tenant_id = :tenant_id
-                ORDER BY date DESC
+                ORDER BY plan_date DESC
                 LIMIT :limit OFFSET :offset
             """),
             {"tenant_id": tenant_id, "limit": limit, "offset": offset},
