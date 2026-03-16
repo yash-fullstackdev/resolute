@@ -5,9 +5,13 @@ export interface TradingPlan {
   enabled_strategies: string[];
   active_underlyings: string[];
   max_trades: number;
+  max_trades_per_day?: number;
   daily_loss_limit: number;
+  daily_loss_limit_inr?: number;
   daily_profit_target?: number;
+  daily_profit_target_inr?: number;
   thesis: string;
+  notes?: string;
   is_locked: boolean;
   locked_at?: string;
   plan_hash?: string;
