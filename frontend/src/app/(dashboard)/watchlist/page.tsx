@@ -4,6 +4,9 @@ import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiClient } from "@/lib/api";
 import { UNDERLYINGS } from "@/lib/constants";
+import { formatINR } from "@/lib/formatters";
+import { useLiveDataStore } from "@/stores/liveDataStore";
+import { useWebSocket } from "@/hooks/useWebSocket";
 import type { ApiResponse } from "@/types/api";
 import { Plus, Trash2, X, Eye } from "lucide-react";
 
@@ -16,6 +19,8 @@ interface Watchlist {
 }
 
 export default function WatchlistPage() {
+  useWebSocket();
+  const ticks = useLiveDataStore((s) => s.ticks);
   const queryClient = useQueryClient();
   const [newName, setNewName] = useState("");
 
@@ -139,20 +144,31 @@ export default function WatchlistPage() {
               {/* Current symbols */}
               {wl.symbols.length > 0 ? (
                 <div className="mt-3 flex flex-wrap gap-2">
-                  {wl.symbols.map((sym) => (
-                    <span
-                      key={sym}
-                      className="flex items-center gap-1.5 rounded-full border border-accent/30 bg-accent/10 px-3 py-1 text-sm font-medium text-accent-light"
-                    >
-                      {sym}
-                      <button
-                        onClick={() => removeSymbol(wl, sym)}
-                        className="rounded-full p-0.5 transition-colors hover:bg-loss/20 hover:text-loss"
+                  {wl.symbols.map((sym) => {
+                    const tick = ticks[sym];
+                    return (
+                      <span
+                        key={sym}
+                        className="flex items-center gap-1.5 rounded-full border border-accent/30 bg-accent/10 px-3 py-1 text-sm font-medium text-accent-light"
                       >
-                        <X className="h-3 w-3" />
-                      </button>
-                    </span>
-                  ))}
+                        {sym}
+                        {tick && (
+                          <span className="ml-1 flex items-center gap-1 text-xs">
+                            <span className="text-white">{formatINR(tick.last_price)}</span>
+                            <span className={tick.change_pct >= 0 ? "text-profit" : "text-loss"}>
+                              {tick.change_pct >= 0 ? "+" : ""}{tick.change_pct.toFixed(2)}%
+                            </span>
+                          </span>
+                        )}
+                        <button
+                          onClick={() => removeSymbol(wl, sym)}
+                          className="rounded-full p-0.5 transition-colors hover:bg-loss/20 hover:text-loss"
+                        >
+                          <X className="h-3 w-3" />
+                        </button>
+                      </span>
+                    );
+                  })}
                 </div>
               ) : (
                 <p className="mt-3 text-sm text-slate-500">No symbols added yet</p>

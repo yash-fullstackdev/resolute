@@ -11,6 +11,7 @@ Responsibilities:
   - Prometheus metrics on /metrics
 """
 
+import json
 import os
 import time
 import uuid
@@ -246,6 +247,29 @@ async def lifespan(app: FastAPI):
         logger.error("nats_connection_failed", error=str(exc))
         raise
 
+    # Subscribe to NATS ticks and forward via socket.io
+    async def on_tick(msg):
+        try:
+            tick = json.loads(msg.data)
+            symbol = tick.get("symbol")
+            last_price = tick.get("last_price")
+            close = tick.get("close")
+            if symbol and last_price is not None and close:
+                change_pct = round((last_price - close) / close * 100, 2)
+                await sio.emit("event", {
+                    "type": "TICK",
+                    "data": {
+                        "symbol": symbol,
+                        "last_price": last_price,
+                        "change_pct": change_pct,
+                    },
+                })
+        except Exception as exc:
+            logger.warning("tick_forward_error", error=str(exc))
+
+    tick_sub = await nats_client.subscribe("ticks.>", cb=on_tick)
+    logger.info("nats_tick_subscription_started", subject="ticks.>")
+
     # WebSocket gauge reference for routers
     app.state.active_ws_gauge = active_websocket_connections
 
@@ -262,6 +286,10 @@ async def lifespan(app: FastAPI):
 
     # ── Shutdown ──
     logger.info("dashboard_api_shutting_down")
+
+    # Unsubscribe from tick feed
+    await tick_sub.unsubscribe()
+    logger.info("nats_tick_subscription_stopped")
 
     # Close NATS
     if nats_client.is_connected:
