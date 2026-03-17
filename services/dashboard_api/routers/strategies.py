@@ -267,7 +267,7 @@ async def list_strategies(request: Request):
         ("vwap_supertrend", "VWAP + Supertrend Combo", "TECHNICAL", "STARTER", "High-conviction entry combining VWAP proximity with Supertrend direction and volume surge confirmation"),
         ("ema_breakdown", "EMA Breakdown", "TECHNICAL", "STARTER", "EMA 2/11 crossover or strong continuation with RSI momentum and volume confirmation — catches trends early"),
         ("rsi_vwap_scalp", "RSI VWAP Scalp", "TECHNICAL", "STARTER", "Mean-reversion scalp at VWAP bands — buys RSI oversold at lower band, sells overbought at upper band"),
-        ("ema33_ob", "33 EMA Option Buying", "TECHNICAL", "STARTER", "Sankalp Chaturvedi methodology — 33 EMA pullback-rejection with RSI zone filter and VWAP confirmation"),
+        ("ema33_ob", "33 EMA Option Buying", "TECHNICAL", "STARTER", "33 EMA pullback-rejection with RSI zone filter and VWAP confirmation"),
         ("smc_order_block", "SMC Order Block", "TECHNICAL", "STARTER", "Smart Money Concepts — enters at institutional Order Blocks after Break of Structure with FVG and sweep confluence"),
     ]
 

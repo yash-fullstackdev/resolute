@@ -224,11 +224,43 @@ class UserWorker:
             if signal is None:
                 continue
 
-            # (d) Signal received -- validate and publish
-            await self._process_signal(signal, strategy, chain)
+            # (d) Route signal based on type
+            if signal.signal_type == "DIRECT":
+                # Informational price signal — no options chain, no order placed
+                await self._publish_direct_signal(signal)
+            else:
+                await self._process_signal(signal, strategy, chain)
 
         # (e) Check exits for open positions
         await self._check_exits(chain)
+
+    async def _publish_direct_signal(self, signal: Signal) -> None:
+        """Publish a DIRECT (no-options) signal to NATS — informational only, no order."""
+        await self._nats.publish(
+            f"signals.{self.tenant_id}.{signal.strategy_name}.{signal.underlying}",
+            {
+                "signal_type": "DIRECT",
+                "signal": signal.strategy_name,
+                "underlying": signal.underlying,
+                "direction": signal.direction,
+                "entry_price": signal.entry_price,
+                "stop_loss_price": signal.stop_loss_price,
+                "target_price": signal.target_price,
+                "stop_loss_pct": signal.stop_loss_pct,
+                "target_pct": signal.target_pct,
+                "confidence": signal.confidence,
+                "metadata": signal.metadata,
+            },
+        )
+        self._log.info(
+            "direct_signal_published",
+            strategy=signal.strategy_name,
+            underlying=signal.underlying,
+            direction=signal.direction,
+            entry=signal.entry_price,
+            stop=signal.stop_loss_price,
+            target=signal.target_price,
+        )
 
     async def _process_signal(
         self,

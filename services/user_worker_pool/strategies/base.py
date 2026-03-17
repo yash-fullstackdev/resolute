@@ -47,6 +47,7 @@ class Signal:
     max_loss_inr: float       # maximum loss per lot in INR
     expiry: date
     confidence: float = 0.0   # 0.0 - 1.0
+    signal_type: str = "OPTIONS"  # "OPTIONS" | "DIRECT" (no chain required)
     metadata: dict[str, Any] = field(default_factory=dict)
 
 

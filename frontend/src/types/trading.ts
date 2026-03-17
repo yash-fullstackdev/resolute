@@ -64,10 +64,16 @@ export interface Signal {
   id: string;
   strategy_name: string;
   underlying: string;
-  direction: SignalDirection;
+  direction: SignalDirection | string;
   strength: number;
   regime: MarketRegime;
   legs: SignalLeg[];
+  /** "OPTIONS" = option leg signal | "DIRECT" = price signal on underlying */
+  signal_type: "OPTIONS" | "DIRECT";
+  /** Populated for DIRECT signals */
+  entry_price: number | null;
+  stop_loss_price: number | null;
+  target_price: number | null;
   rationale: string;
   created_at: string;
   executed: boolean;

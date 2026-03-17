@@ -76,6 +76,19 @@ async def list_signals(
 
     def _map_signal(r: dict) -> dict:
         legs = r.get("legs") or []
+        if not isinstance(legs, list):
+            legs = []
+        # DIRECT signal if no option legs
+        signal_type = "DIRECT" if len(legs) == 0 else "OPTIONS"
+        # For DIRECT signals, entry/stop/target come from max_loss_inr / target_profit_inr
+        # or from a synthetic leg stored as {"type": "DIRECT", ...}
+        entry_price = None
+        stop_loss_price = None
+        target_price = None
+        if signal_type == "DIRECT" and legs and isinstance(legs[0], dict):
+            entry_price = legs[0].get("entry_price")
+            stop_loss_price = legs[0].get("stop_loss_price")
+            target_price = legs[0].get("target_price")
         return {
             "id": str(r["id"]),
             "strategy_name": r.get("strategy", ""),
@@ -83,7 +96,11 @@ async def list_signals(
             "direction": r.get("direction", ""),
             "strength": r.get("strength") or 0.0,
             "regime": r.get("regime") or "UNKNOWN",
-            "legs": legs if isinstance(legs, list) else [],
+            "legs": legs,
+            "signal_type": signal_type,
+            "entry_price": entry_price,
+            "stop_loss_price": stop_loss_price,
+            "target_price": target_price,
             "rationale": r.get("rationale") or "",
             "created_at": r["time"].isoformat() if r.get("time") else "",
             "executed": r.get("acted_upon") or False,

@@ -122,32 +122,66 @@ class TTMSqueezeStrategy(BaseStrategy):
         # ── entry price ───────────────────────────────────────────────
         spot = data_1m["close"][-1] if data_1m and "close" in data_1m else closes[-1]
 
-        # ── option leg ────────────────────────────────────────────────
-        option_type = "CE" if signal_dir == "BUY" else "PE"
-        dte = self.get_dte(chain)
-
-        if chain.strikes:
-            strike_data = self.find_atm_strike(chain, option_type)
-            if strike_data is None:
-                return None
-            premium = strike_data.call_ltp if option_type == "CE" else strike_data.put_ltp
-            if premium <= 0:
-                premium = _estimate_premium(spot, chain.atm_iv, dte)
-            strike_val = strike_data.strike
-        else:
-            strike_val = _atm_strike(spot, chain.underlying)
-            premium = _estimate_premium(spot, chain.atm_iv, dte)
-
-        # ── stop / target ─────────────────────────────────────────────
-        stop_loss_pct = config.get("stop_loss_pct", 40.0)
-        target_pct = config.get("target_pct", 80.0)
-        stop_loss_price = premium * (1.0 - stop_loss_pct / 100.0)
-        target_price = premium * (1.0 + target_pct / 100.0)
-
         now = datetime.now(timezone.utc)
         time_stop = _day_end_stop(now)
         if time_stop <= now:
             time_stop = now + timedelta(hours=2)
+
+        common_meta = {
+            "momentum": round(mom_curr, 2),
+            "signal_dir": signal_dir,
+            "bandwidth": round(bb["bandwidth"][-1] * 100, 4) if bb["bandwidth"] else 0,
+        }
+
+        # ── no options chain → DIRECT signal on underlying price ──────
+        if not chain.strikes:
+            atr_vals = atr_wilder(highs, lows, closes, 14)
+            atr_val = atr_vals[-1] if atr_vals else spot * 0.01
+            stop_dist = max(spot * 0.005, atr_val * 1.5)
+            target_dist = stop_dist * 2.0
+            if signal_dir == "BUY":
+                sl_price = round(spot - stop_dist, 2)
+                tgt_price = round(spot + target_dist, 2)
+            else:
+                sl_price = round(spot + stop_dist, 2)
+                tgt_price = round(spot - target_dist, 2)
+            sl_pct = round(stop_dist / spot * 100, 2)
+            tgt_pct = round(target_dist / spot * 100, 2)
+            return Signal(
+                strategy_name=self.name,
+                underlying=chain.underlying,
+                segment=config.get("segment", "NSE_INDEX"),
+                direction="BULLISH" if signal_dir == "BUY" else "BEARISH",
+                legs=[],
+                entry_price=round(spot, 2),
+                stop_loss_pct=sl_pct,
+                stop_loss_price=sl_price,
+                target_pct=tgt_pct,
+                target_price=tgt_price,
+                time_stop=time_stop,
+                max_loss_inr=stop_dist,
+                expiry=chain.expiry,
+                confidence=0.75,
+                signal_type="DIRECT",
+                metadata={**common_meta, "atr": round(atr_val, 2)},
+            )
+
+        # ── options chain present → standard OPTIONS signal ───────────
+        option_type = "CE" if signal_dir == "BUY" else "PE"
+        dte = self.get_dte(chain)
+
+        strike_data = self.find_atm_strike(chain, option_type)
+        if strike_data is None:
+            return None
+        premium = strike_data.call_ltp if option_type == "CE" else strike_data.put_ltp
+        if premium <= 0:
+            premium = _estimate_premium(spot, chain.atm_iv, dte)
+        strike_val = strike_data.strike
+
+        stop_loss_pct = config.get("stop_loss_pct", 40.0)
+        target_pct = config.get("target_pct", 80.0)
+        stop_loss_price = premium * (1.0 - stop_loss_pct / 100.0)
+        target_price = premium * (1.0 + target_pct / 100.0)
 
         leg = Leg(
             option_type=option_type,
@@ -173,11 +207,8 @@ class TTMSqueezeStrategy(BaseStrategy):
             max_loss_inr=premium,
             expiry=chain.expiry,
             confidence=0.8,
-            metadata={
-                "momentum": round(mom_curr, 2),
-                "signal_type": signal_dir,
-                "bandwidth": round(bb["bandwidth"][-1] * 100, 4) if bb["bandwidth"] else 0,
-            },
+            signal_type="OPTIONS",
+            metadata=common_meta,
         )
 
     def should_exit(self, position, current_chain, config):

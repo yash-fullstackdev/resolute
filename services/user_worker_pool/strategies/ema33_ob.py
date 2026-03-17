@@ -1,4 +1,4 @@
-"""EMA33OBStrategy — 33 EMA Option Buying (Sankalp Chaturvedi methodology).
+"""EMA33OBStrategy — 33 EMA Option Buying.
 
 Entry logic (ALL required):
   1. Price above/below 33 EMA on 5m.
