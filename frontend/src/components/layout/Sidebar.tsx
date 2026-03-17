@@ -16,18 +16,24 @@ import {
   Settings,
   ChevronLeft,
   ChevronRight,
+  Grid3X3,
+  BookOpen,
+  FileText,
 } from "lucide-react";
 
 const navItems = [
   { href: "/overview", label: "Overview", icon: LayoutDashboard },
   { href: "/positions", label: "Positions", icon: BarChart3 },
   { href: "/signals", label: "Signals", icon: Zap },
+  { href: "/chain", label: "Option Chain", icon: Grid3X3 },
   { href: "/plan", label: "Plan", icon: ClipboardList },
   { href: "/watchlist", label: "Watchlist", icon: Eye },
   { href: "/strategies", label: "Strategies", icon: Layers },
   { href: "/strategies/builder", label: "Builder", icon: Wrench },
   { href: "/discipline", label: "Discipline", icon: Shield },
   { href: "/performance", label: "Performance", icon: TrendingUp },
+  { href: "/journal", label: "Journal", icon: BookOpen },
+  { href: "/reports", label: "Reports", icon: FileText },
   { href: "/settings", label: "Settings", icon: Settings },
 ];
 

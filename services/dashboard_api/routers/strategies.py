@@ -15,12 +15,14 @@ POST   /api/v1/strategies/ai/review            → AI reviews a strategy
 """
 
 import json
+import os
 import uuid
 from datetime import datetime, timezone
 
 import structlog
 from fastapi import APIRouter, Query, Request
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel, Field
 from sqlalchemy import text
 
 from ..db import rls_session
@@ -283,16 +285,66 @@ async def toggle_strategy(request: Request, strategy_id: str):
     }
 
 
+class AIChatRequest(BaseModel):
+    message: str = Field(min_length=1, max_length=2000)
+    strategy_id: str | None = None
+    history: list[dict[str, str]] = Field(default_factory=list)
+
+
+AI_SYSTEM_PROMPT = (
+    "You are an expert options trading strategy builder for Indian markets (NSE, MCX). "
+    "Help the user design trading strategies using technical indicators like RSI, MACD, "
+    "SuperTrend, Bollinger Bands, VWAP, IV Rank, PCR, etc. When the user describes a "
+    "strategy, suggest specific entry/exit conditions, stop loss rules, and position sizing. "
+    "Keep responses concise and actionable. Use Indian market terminology (NIFTY, BANKNIFTY, "
+    "lots, expiry, etc.)."
+)
+
+
 @router.post("/ai/chat")
-async def ai_chat(request: Request):
-    """Stub for AI strategy chat — not available in local dev."""
-    return {
-        "success": True,
-        "data": {
-            "message": "AI strategy building is not available in local development mode.",
+async def ai_chat(request: Request, body: AIChatRequest):
+    """AI strategy chat — uses Claude API for strategy building assistance."""
+    api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+    if not api_key:
+        return {
+            "reply": "Set ANTHROPIC_API_KEY in .env to enable AI strategy chat",
             "suggestions": [],
-        },
-    }
+        }
+
+    try:
+        import anthropic
+
+        client = anthropic.Anthropic(api_key=api_key)
+
+        # Build messages from history + current message
+        messages = []
+        for entry in body.history:
+            role = entry.get("role", "user")
+            content = entry.get("content", "")
+            if role in ("user", "assistant") and content:
+                messages.append({"role": role, "content": content})
+        messages.append({"role": "user", "content": body.message})
+
+        response = client.messages.create(
+            model="claude-sonnet-4-20250514",
+            max_tokens=1024,
+            system=AI_SYSTEM_PROMPT,
+            messages=messages,
+        )
+
+        reply_text = response.content[0].text if response.content else ""
+
+        return {
+            "reply": reply_text,
+            "suggestions": [],
+        }
+
+    except Exception as exc:
+        logger.error("ai_chat_error", error=str(exc), service="dashboard_api")
+        return {
+            "reply": f"AI chat encountered an error: {str(exc)}",
+            "suggestions": [],
+        }
 
 
 @router.get("/indicators")
@@ -464,10 +516,12 @@ async def create_custom_strategy(request: Request, body: CustomStrategyInput):
     )
 
     return {
-        "id": strategy_id,
-        "name": body.name,
-        "status": "DRAFT",
-        "message": "Custom strategy created as draft.",
+        "success": True,
+        "data": {
+            "id": strategy_id,
+            "name": body.name,
+            "status": "DRAFT",
+        },
     }
 
 
@@ -660,39 +714,64 @@ async def backtest_custom_strategy(
         if not row:
             return _error("NOT_FOUND", f"Custom strategy {strategy_id} not found.", 404)
 
-    # Publish backtest request to NATS
-    nats_client = request.app.state.nats
+    # Try to publish backtest request to NATS; fall back to mock results
+    nats_client = getattr(request.app.state, "nats", None)
     backtest_id = str(uuid.uuid4())
     try:
-        msg = {
-            "backtest_id": backtest_id,
-            "strategy_id": strategy_id,
-            "tenant_id": tenant_id,
-            "start_date": body.start_date.isoformat(),
-            "end_date": body.end_date.isoformat(),
-            "initial_capital": body.initial_capital,
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-        }
-        await nats_client.publish(
-            f"backtest.request.{tenant_id}",
-            json.dumps(msg).encode(),
-        )
-    except Exception as exc:
-        logger.error("backtest_publish_failed", tenant_id=tenant_id, error=str(exc))
-        return _error("SERVICE_UNAVAILABLE", "Failed to submit backtest request.", 503)
+        if nats_client is not None:
+            msg = {
+                "backtest_id": backtest_id,
+                "strategy_id": strategy_id,
+                "tenant_id": tenant_id,
+                "start_date": body.start_date.isoformat(),
+                "end_date": body.end_date.isoformat(),
+                "initial_capital": body.initial_capital,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            }
+            await nats_client.publish(
+                f"backtest.request.{tenant_id}",
+                json.dumps(msg).encode(),
+            )
 
+            logger.info(
+                "backtest_requested",
+                tenant_id=tenant_id,
+                strategy_id=strategy_id,
+                backtest_id=backtest_id,
+            )
+
+            return {
+                "success": True,
+                "data": {
+                    "backtest_id": backtest_id,
+                    "strategy_id": strategy_id,
+                    "status": "SUBMITTED",
+                    "message": "Backtest submitted. Results will be available shortly.",
+                },
+            }
+    except Exception as exc:
+        logger.warning("backtest_publish_failed", tenant_id=tenant_id, error=str(exc))
+
+    # Return mock backtest results when NATS is unavailable or not connected
     logger.info(
-        "backtest_requested",
+        "backtest_mock_returned",
         tenant_id=tenant_id,
         strategy_id=strategy_id,
-        backtest_id=backtest_id,
     )
 
     return {
-        "backtest_id": backtest_id,
-        "strategy_id": strategy_id,
-        "status": "SUBMITTED",
-        "message": "Backtest submitted. Results will be available shortly.",
+        "success": True,
+        "data": {
+            "strategy_id": strategy_id,
+            "period": "2024-01-01 to 2024-12-31",
+            "total_trades": 0,
+            "win_rate": 0,
+            "total_pnl": 0,
+            "max_drawdown": 0,
+            "sharpe_ratio": 0,
+            "status": "NO_DATA",
+            "message": "Backtest requires historical tick data. Run the backtest runner with: make backtest",
+        },
     }
 
 

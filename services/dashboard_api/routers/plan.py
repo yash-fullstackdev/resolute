@@ -258,7 +258,20 @@ async def get_plan_history(
 
     logger.info("plan_history_retrieved", tenant_id=tenant_id, count=len(rows))
 
+    plans = []
+    for r in rows:
+        plan = dict(r)
+        plans.append({
+            **plan,
+            "thesis": plan.get("notes", ""),
+            "is_locked": plan.get("status") == "LOCKED",
+            "max_trades": plan.get("max_trades_per_day"),
+            "daily_loss_limit": plan.get("daily_loss_limit_inr"),
+            "daily_profit_target": plan.get("daily_profit_target_inr"),
+        })
+
     return {
-        "plans": [dict(r) for r in rows],
+        "success": True,
+        "data": plans,
         "total": total,
     }

@@ -6,7 +6,7 @@ GET /api/v1/dashboard/stats  → Overview stats for dashboard
 """
 
 import uuid
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 
 import structlog
 from fastapi import APIRouter, Request
@@ -77,30 +77,92 @@ async def update_profile(request: Request):
 @router.get("/dashboard/stats")
 async def dashboard_stats(request: Request):
     tenant_id = request.state.tenant_id
+    today = date.today()
 
     stats = {
         "total_pnl": 0.0,
         "today_pnl": 0.0,
         "open_positions": 0,
         "total_trades": 0,
+        "total_signals_today": 0,
+        "capital_at_risk": 0.0,
         "win_rate": 0.0,
         "discipline_score": 100,
         "active_strategies": 0,
         "circuit_breaker": "ACTIVE",
     }
 
+    # today_pnl: SUM of realised_pnl_inr from positions closed today
     try:
         async with rls_session(tenant_id) as session:
-            pos_result = await session.execute(
+            result = await session.execute(
+                text("""
+                    SELECT COALESCE(SUM(realised_pnl_inr), 0)
+                    FROM positions
+                    WHERE exit_time >= :today
+                """),
+                {"today": today},
+            )
+            stats["today_pnl"] = float(result.scalar() or 0)
+    except Exception as exc:
+        logger.warning("dashboard_stats_today_pnl_failed", tenant_id=tenant_id, error=str(exc))
+
+    # open_positions: COUNT of OPEN positions
+    try:
+        async with rls_session(tenant_id) as session:
+            result = await session.execute(
                 text("SELECT COUNT(*) FROM positions WHERE status = 'OPEN'")
             )
-            stats["open_positions"] = pos_result.scalar() or 0
+            stats["open_positions"] = result.scalar() or 0
+    except Exception as exc:
+        logger.warning("dashboard_stats_open_positions_failed", tenant_id=tenant_id, error=str(exc))
 
-            trades_result = await session.execute(
+    # total_trades: COUNT from orders
+    try:
+        async with rls_session(tenant_id) as session:
+            result = await session.execute(
                 text("SELECT COUNT(*) FROM orders")
             )
-            stats["total_trades"] = trades_result.scalar() or 0
+            stats["total_trades"] = result.scalar() or 0
     except Exception as exc:
-        logger.warning("dashboard_stats_partial_failure", error=str(exc))
+        logger.warning("dashboard_stats_total_trades_failed", tenant_id=tenant_id, error=str(exc))
+
+    # total_signals_today: COUNT from signals where time >= today
+    try:
+        async with rls_session(tenant_id) as session:
+            result = await session.execute(
+                text("SELECT COUNT(*) FROM signals WHERE time >= :today"),
+                {"today": today},
+            )
+            stats["total_signals_today"] = result.scalar() or 0
+    except Exception as exc:
+        logger.warning("dashboard_stats_signals_today_failed", tenant_id=tenant_id, error=str(exc))
+
+    # capital_at_risk: SUM of entry_cost_inr from OPEN positions
+    try:
+        async with rls_session(tenant_id) as session:
+            result = await session.execute(
+                text("""
+                    SELECT COALESCE(SUM(entry_cost_inr), 0)
+                    FROM positions
+                    WHERE status = 'OPEN'
+                """)
+            )
+            stats["capital_at_risk"] = float(result.scalar() or 0)
+    except Exception as exc:
+        logger.warning("dashboard_stats_capital_at_risk_failed", tenant_id=tenant_id, error=str(exc))
+
+    # active_strategies: COUNT DISTINCT strategy from OPEN positions
+    try:
+        async with rls_session(tenant_id) as session:
+            result = await session.execute(
+                text("SELECT COUNT(DISTINCT strategy) FROM positions WHERE status = 'OPEN'")
+            )
+            stats["active_strategies"] = result.scalar() or 0
+    except Exception as exc:
+        logger.warning("dashboard_stats_active_strategies_failed", tenant_id=tenant_id, error=str(exc))
+
+    # discipline_score: 100 (keep default until discipline_scores table exists)
+    # circuit_breaker: "ACTIVE" (keep default)
 
     return {"success": True, "data": stats}

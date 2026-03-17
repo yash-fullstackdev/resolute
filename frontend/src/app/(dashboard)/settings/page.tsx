@@ -12,8 +12,11 @@ export default function SettingsPage() {
   const tier = useAuthStore((s) => s.tier);
 
   const [fullName, setFullName] = useState(user?.full_name ?? "");
+  const [broker, setBroker] = useState<"dhan" | "zerodha">("dhan");
   const [brokerApiKey, setBrokerApiKey] = useState("");
   const [brokerApiSecret, setBrokerApiSecret] = useState("");
+  const [clientId, setClientId] = useState("");
+  const [totpSecret, setTotpSecret] = useState("");
 
   const profileMutation = useMutation({
     mutationFn: async () => {
@@ -24,8 +27,11 @@ export default function SettingsPage() {
   const brokerMutation = useMutation({
     mutationFn: async () => {
       await authClient.post("/broker/connect", {
+        broker,
         api_key: brokerApiKey,
         api_secret: brokerApiSecret,
+        client_id: clientId,
+        totp_secret: totpSecret,
       });
     },
   });
@@ -98,6 +104,27 @@ export default function SettingsPage() {
         </div>
         <div className="space-y-4">
           <div>
+            <label className="mb-1 block text-xs text-slate-400">Broker</label>
+            <select
+              value={broker}
+              onChange={(e) => setBroker(e.target.value as "dhan" | "zerodha")}
+              className="w-full rounded-lg border border-surface-border bg-surface-dark px-4 py-2.5 text-sm text-white focus:border-accent focus:outline-none"
+            >
+              <option value="dhan">Dhan</option>
+              <option value="zerodha">Zerodha</option>
+            </select>
+          </div>
+          <div>
+            <label className="mb-1 block text-xs text-slate-400">Client ID</label>
+            <input
+              type="text"
+              value={clientId}
+              onChange={(e) => setClientId(e.target.value)}
+              placeholder="Enter broker client ID"
+              className="w-full rounded-lg border border-surface-border bg-surface-dark px-4 py-2.5 text-sm text-white placeholder-slate-500 focus:border-accent focus:outline-none"
+            />
+          </div>
+          <div>
             <label className="mb-1 block text-xs text-slate-400">API Key</label>
             <input
               type="text"
@@ -117,6 +144,16 @@ export default function SettingsPage() {
               className="w-full rounded-lg border border-surface-border bg-surface-dark px-4 py-2.5 text-sm text-white placeholder-slate-500 focus:border-accent focus:outline-none"
             />
           </div>
+          <div>
+            <label className="mb-1 block text-xs text-slate-400">TOTP Secret</label>
+            <input
+              type="password"
+              value={totpSecret}
+              onChange={(e) => setTotpSecret(e.target.value)}
+              placeholder="Enter TOTP secret (optional)"
+              className="w-full rounded-lg border border-surface-border bg-surface-dark px-4 py-2.5 text-sm text-white placeholder-slate-500 focus:border-accent focus:outline-none"
+            />
+          </div>
           {brokerMutation.isError && (
             <div className="flex items-center gap-2 rounded-lg border border-loss/30 bg-loss/10 px-3 py-2 text-xs text-loss">
               <AlertCircle className="h-4 w-4" />
@@ -125,7 +162,7 @@ export default function SettingsPage() {
           )}
           <button
             onClick={() => brokerMutation.mutate()}
-            disabled={brokerMutation.isPending || !brokerApiKey || !brokerApiSecret}
+            disabled={brokerMutation.isPending || !brokerApiKey || !brokerApiSecret || !clientId}
             className="flex items-center gap-2 rounded-lg bg-accent px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-accent-light disabled:opacity-50"
           >
             {brokerMutation.isSuccess ? (

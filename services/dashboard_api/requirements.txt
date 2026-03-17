@@ -32,5 +32,8 @@ python-socketio[asyncio]==5.11.0
 # ASGI middleware
 starlette==0.41.3
 
+# AI — Claude API for strategy chat
+anthropic>=0.39.0
+
 # Timezone support (stdlib in 3.9+)
 tzdata==2024.2

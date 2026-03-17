@@ -48,22 +48,18 @@ async def get_discipline_score(request: Request):
     """Get the authenticated user's rolling discipline score (0–100)."""
     tenant_id = request.state.tenant_id
 
-    try:
-        async with rls_session(tenant_id) as session:
-            result = await session.execute(
-                text("""
-                    SELECT score, components, trend, last_updated
-                    FROM discipline_scores
-                    WHERE tenant_id = :tenant_id
-                    ORDER BY last_updated DESC
-                    LIMIT 1
-                """),
-                {"tenant_id": tenant_id},
-            )
-            row = result.mappings().first()
-    except Exception as exc:
-        logger.warning("discipline_scores_query_failed", tenant_id=tenant_id, error=str(exc))
-        row = None
+    async with rls_session(tenant_id) as session:
+        result = await session.execute(
+            text("""
+                SELECT score, components, trend, last_updated
+                FROM discipline_scores
+                WHERE tenant_id = :tenant_id
+                ORDER BY last_updated DESC
+                LIMIT 1
+            """),
+            {"tenant_id": tenant_id},
+        )
+        row = result.mappings().first()
 
     if not row:
         return {
@@ -94,21 +90,17 @@ async def get_circuit_breaker(request: Request):
     """Get the authenticated user's circuit breaker state."""
     tenant_id = request.state.tenant_id
 
-    try:
-        async with rls_session(tenant_id) as session:
-            result = await session.execute(
-                text("""
-                    SELECT is_halted, halted_at, halt_reason, reset_at,
-                           daily_loss_inr, daily_loss_limit_inr
-                    FROM circuit_breaker_state
-                    WHERE tenant_id = :tenant_id
-                """),
-                {"tenant_id": tenant_id},
-            )
-            row = result.mappings().first()
-    except Exception as exc:
-        logger.warning("circuit_breaker_query_failed", tenant_id=tenant_id, error=str(exc))
-        row = None
+    async with rls_session(tenant_id) as session:
+        result = await session.execute(
+            text("""
+                SELECT is_halted, halted_at, halt_reason, reset_at,
+                       daily_loss_inr, daily_loss_limit_inr
+                FROM circuit_breaker_state
+                WHERE tenant_id = :tenant_id
+            """),
+            {"tenant_id": tenant_id},
+        )
+        row = result.mappings().first()
 
     if not row:
         return {

@@ -423,7 +423,7 @@ class CustomStrategyInput(BaseModel):
     exit_conditions: list[ConditionInput] = Field(min_length=1, max_length=10)
     option_action: str
     strike_selection: str = Field(
-        pattern=r"^(ATM|1_OTM|2_OTM|1_ITM|DELTA_BASED)$"
+        pattern=r"^(ATM|1_OTM|2_OTM|1_ITM|OTM_1|OTM_2|OTM_3|ITM_1|ITM_2|DELTA_BASED)$"
     )
     dte_min: int = Field(ge=1, le=90)
     dte_max: int = Field(ge=1, le=180)

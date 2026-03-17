@@ -41,38 +41,93 @@ export default function StrategyBuilderPage() {
 
   const allOperands = [...availableOperands, "Price", "Volume", "VWAP", "0", "20", "30", "50", "70", "80", "100"];
 
+  // Map frontend operator names to backend operator symbols
+  const mapOperator = (op: string): string => {
+    const mapping: Record<string, string> = {
+      GREATER_THAN: ">",
+      LESS_THAN: "<",
+      EQUALS: "==",
+      CROSSES_ABOVE: "CROSSES_ABOVE",
+      CROSSES_BELOW: "CROSSES_BELOW",
+      BETWEEN: "BETWEEN",
+    };
+    return mapping[op] || op;
+  };
+
+  // Transform frontend conditions to backend ConditionInput format
+  const transformConditions = (conditions: Condition[]) =>
+    conditions.map((c) => ({
+      left_operand: c.left_operand,
+      operator: mapOperator(c.operator),
+      right_operand: String(c.right_operand),
+    }));
+
+  // Group entry conditions by their group number into array of arrays
+  const groupEntryConditions = (conditions: Condition[]) => {
+    const groups: Record<number, Condition[]> = {};
+    for (const c of conditions) {
+      const g = c.group ?? 0;
+      if (!groups[g]) groups[g] = [];
+      groups[g].push(c);
+    }
+    const sortedKeys = Object.keys(groups).map(Number).sort((a, b) => a - b);
+    return sortedKeys.map((key) => transformConditions(groups[key] ?? []));
+  };
+
+  // Transform frontend indicators to backend IndicatorInput format
+  const transformIndicators = (inds: IndicatorConfig[]) =>
+    inds.map((ind) => ({
+      indicator_type: ind.name,
+      params: ind.params,
+      label: ind.display_name || ind.name,
+    }));
+
+  // Build the flattened payload expected by the backend
+  const buildPayload = () => ({
+    name,
+    description,
+    category: optionConfig.action.startsWith("SELL") ? "SELLING" : "BUYING",
+    target_symbols: selectedSymbols,
+    indicators: transformIndicators(indicators),
+    entry_conditions: groupEntryConditions(entryConditions),
+    exit_conditions: transformConditions(exitConditions),
+    option_action: optionConfig.action,
+    strike_selection: optionConfig.strike_selection,
+    dte_min: optionConfig.min_dte,
+    dte_max: optionConfig.max_dte,
+    stop_loss_pct: optionConfig.stop_loss_pct,
+    profit_target_pct: optionConfig.target_pct,
+  });
+
+  const [savedStrategyId, setSavedStrategyId] = useState<string | null>(null);
+
   const saveMutation = useMutation({
     mutationFn: async () => {
-      const payload = {
-        name,
-        description,
-        indicators,
-        entry_conditions: entryConditions,
-        exit_conditions: exitConditions,
-        symbols: selectedSymbols,
-        option_config: optionConfig,
-      };
+      const payload = buildPayload();
       const res = await apiClient.post<ApiResponse<CustomStrategyDefinition>>(
         "/strategies/custom",
         payload
       );
       return res.data.data;
     },
+    onSuccess: (data) => {
+      if (data?.id) setSavedStrategyId(data.id);
+    },
   });
 
   const backtestMutation = useMutation({
     mutationFn: async () => {
-      const payload = {
-        name,
-        indicators,
-        entry_conditions: entryConditions,
-        exit_conditions: exitConditions,
-        symbols: selectedSymbols,
-        option_config: optionConfig,
-      };
+      const strategyId = savedStrategyId || saveMutation.data?.id;
+      if (!strategyId) {
+        throw new Error("Save the strategy first before running a backtest.");
+      }
       const res = await apiClient.post<ApiResponse<Record<string, unknown>>>(
-        "/strategies/custom/backtest",
-        payload
+        `/strategies/custom/${strategyId}/backtest`,
+        {
+          start_date: "2024-01-01",
+          end_date: "2024-12-31",
+          initial_capital: 100000,
+        }
       );
       return res.data.data;
     },
@@ -313,7 +368,7 @@ export default function StrategyBuilderPage() {
             </button>
             <button
               onClick={() => backtestMutation.mutate()}
-              disabled={backtestMutation.isPending || indicators.length === 0}
+              disabled={backtestMutation.isPending || indicators.length === 0 || (!savedStrategyId && !saveMutation.data?.id)}
               className="flex items-center gap-2 rounded-lg border border-surface-border bg-surface px-4 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-surface-light disabled:opacity-50"
             >
               <Play className="h-4 w-4" />
