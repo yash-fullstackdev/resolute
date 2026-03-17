@@ -31,7 +31,7 @@ from ..models.schemas import (
 )
 
 logger = structlog.get_logger(service="auth_service")
-router = APIRouter(prefix="/broker", tags=["broker"])
+router = APIRouter(prefix="/auth/v1/broker", tags=["broker"])
 
 
 def _error_response(status_code: int, code: str, message: str, details: dict | None = None):
