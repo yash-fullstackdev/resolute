@@ -1,21 +1,59 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useRef, useCallback, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiClient } from "@/lib/api";
-import { UNDERLYINGS } from "@/lib/constants";
 import { formatINR } from "@/lib/formatters";
 import { useLiveDataStore } from "@/stores/liveDataStore";
 import { useWebSocket } from "@/hooks/useWebSocket";
 import type { ApiResponse } from "@/types/api";
-import { Plus, Trash2, X, Eye, ArrowLeft, TrendingUp, TrendingDown, Minus, Search } from "lucide-react";
+import { Plus, Trash2, X, Eye, ArrowLeft, TrendingUp, TrendingDown, Minus, Search, Loader2 } from "lucide-react";
 
-const ALL_SYMBOLS = {
-  "Indices": ["NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY"],
-  "Large Cap": ["RELIANCE", "HDFCBANK", "INFY", "TCS", "ICICIBANK", "SBIN"],
-} as const;
+interface SymbolResult {
+  symbol: string;
+  security_id: number;
+}
 
-const ALL_SYMBOL_LIST = Object.values(ALL_SYMBOLS).flat();
+function useSymbolSearch() {
+  const [query, setQuery] = useState("");
+  const [results, setResults] = useState<SymbolResult[]>([]);
+  const [isSearching, setIsSearching] = useState(false);
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const search = useCallback((q: string) => {
+    setQuery(q);
+    if (timerRef.current) clearTimeout(timerRef.current);
+
+    const trimmed = q.trim();
+    if (!trimmed) {
+      setResults([]);
+      setIsSearching(false);
+      return;
+    }
+
+    setIsSearching(true);
+    timerRef.current = setTimeout(async () => {
+      try {
+        const res = await apiClient.get<ApiResponse<SymbolResult[]>>(
+          `/symbols/search?q=${encodeURIComponent(trimmed)}&limit=15`
+        );
+        setResults(res.data.data);
+      } catch {
+        setResults([]);
+      } finally {
+        setIsSearching(false);
+      }
+    }, 300);
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (timerRef.current) clearTimeout(timerRef.current);
+    };
+  }, []);
+
+  return { query, search, results, isSearching };
+}
 
 interface Watchlist {
   id: string;
@@ -31,7 +69,7 @@ export default function WatchlistPage() {
   const queryClient = useQueryClient();
   const [newName, setNewName] = useState("");
   const [selectedWatchlist, setSelectedWatchlist] = useState<Watchlist | null>(null);
-  const [symbolSearch, setSymbolSearch] = useState("");
+  const { query: symbolSearch, search: setSymbolSearch, results: symbolResults, isSearching } = useSymbolSearch();
 
   const { data: watchlists, isLoading } = useQuery<Watchlist[]>({
     queryKey: ["watchlists"],
@@ -204,44 +242,48 @@ export default function WatchlistPage() {
 
         {/* Add symbols section */}
         <div className="rounded-xl border border-surface-border bg-surface p-5">
-          <div className="flex items-center justify-between mb-4">
-            <p className="text-sm font-medium text-slate-300">Add symbols</p>
-            <div className="relative">
-              <Search className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-500" />
-              <input
-                type="text"
-                value={symbolSearch}
-                onChange={(e) => setSymbolSearch(e.target.value.toUpperCase())}
-                placeholder="Search..."
-                className="rounded-lg border border-surface-border bg-surface-dark pl-8 pr-3 py-1.5 text-xs text-white placeholder-slate-500 focus:border-accent focus:outline-none w-40"
-              />
-            </div>
+          <p className="mb-3 text-sm font-medium text-slate-300">Add symbols</p>
+          <div className="relative mb-4">
+            <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500" />
+            <input
+              type="text"
+              value={symbolSearch}
+              onChange={(e) => setSymbolSearch(e.target.value.toUpperCase())}
+              placeholder="Type to search NSE symbols..."
+              className="w-full rounded-lg border border-surface-border bg-surface-dark pl-10 pr-3 py-2.5 text-sm text-white placeholder-slate-500 focus:border-accent focus:outline-none"
+            />
+            {isSearching && (
+              <Loader2 className="absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 animate-spin text-slate-500" />
+            )}
           </div>
-          {Object.entries(ALL_SYMBOLS).map(([category, symbols]) => {
-            const available = symbols.filter(
-              (s) => !activeWatchlist.symbols.includes(s) && (!symbolSearch || s.includes(symbolSearch))
-            );
-            if (available.length === 0) return null;
-            return (
-              <div key={category} className="mb-3">
-                <p className="mb-1.5 text-xs font-medium uppercase tracking-wider text-slate-500">{category}</p>
+          {symbolSearch.trim() ? (
+            (() => {
+              const filtered = symbolResults.filter(
+                (s) => !activeWatchlist.symbols.includes(s.symbol)
+              );
+              if (isSearching) return null;
+              if (filtered.length === 0) {
+                return (
+                  <p className="text-sm text-slate-500">No symbols found</p>
+                );
+              }
+              return (
                 <div className="flex flex-wrap gap-1.5">
-                  {available.map((sym) => (
+                  {filtered.map((s) => (
                     <button
-                      key={sym}
-                      onClick={() => addSymbol(activeWatchlist, sym)}
+                      key={s.symbol}
+                      onClick={() => addSymbol(activeWatchlist, s.symbol)}
                       className="flex items-center gap-1 rounded-lg border border-surface-border px-3 py-1.5 text-sm text-slate-400 transition-colors hover:border-accent/50 hover:bg-accent/10 hover:text-white"
                     >
                       <Plus className="h-3 w-3" />
-                      {sym}
+                      {s.symbol}
                     </button>
                   ))}
                 </div>
-              </div>
-            );
-          })}
-          {ALL_SYMBOL_LIST.filter((s) => !activeWatchlist.symbols.includes(s)).length === 0 && (
-            <span className="text-sm text-slate-500">All available symbols added</span>
+              );
+            })()
+          ) : (
+            <p className="text-sm text-slate-500">Type to search NSE symbols</p>
           )}
         </div>
       </div>
