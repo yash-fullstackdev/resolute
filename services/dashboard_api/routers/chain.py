@@ -57,19 +57,14 @@ async def get_chain(request: Request, underlying: str):
         )
         chain_data = json.loads(response.data.decode())
         logger.info("chain_retrieved", underlying=underlying, segment=segment)
-        return chain_data
+        # Normalize: if NATS returns a list, use it; if it returns an object with strikes, use that
+        strikes = chain_data if isinstance(chain_data, list) else chain_data.get("strikes", [])
+        return {"success": True, "data": strikes}
     except Exception as exc:
         logger.warning("chain_request_failed", underlying=underlying, error=str(exc))
         return {
             "success": True,
-            "data": {
-                "underlying": underlying,
-                "spot_price": 0,
-                "expiry": "",
-                "strikes": [],
-                "pcr": 0,
-                "message": "Chain data not available. Signal engine may not be processing this underlying yet.",
-            },
+            "data": [],
         }
 
 
@@ -82,12 +77,24 @@ async def get_regime(request: Request):
     """
     redis = request.app.state.redis
 
+    default_regime = {
+        "regime": "UNKNOWN",
+        "description": "Market regime data not available",
+    }
+
     try:
         # Try Redis cache first
         cached = await redis.get("market:regime:all")
         if cached:
             regimes = json.loads(cached)
-            return {"regimes": regimes}
+            regime_str = regimes if isinstance(regimes, str) else regimes.get("NIFTY", "UNKNOWN") if isinstance(regimes, dict) else "UNKNOWN"
+            return {
+                "success": True,
+                "data": {
+                    "regime": regime_str,
+                    "description": f"Current market regime: {regime_str}",
+                },
+            }
     except Exception as exc:
         logger.warning("regime_redis_cache_miss", error=str(exc))
 
@@ -107,14 +114,17 @@ async def get_regime(request: Request):
         except Exception:
             pass
 
-        return {"regimes": regime_data}
+        regime_str = regime_data if isinstance(regime_data, str) else regime_data.get("NIFTY", "UNKNOWN") if isinstance(regime_data, dict) else "UNKNOWN"
+        return {
+            "success": True,
+            "data": {
+                "regime": regime_str,
+                "description": f"Current market regime: {regime_str}",
+            },
+        }
     except Exception as exc:
         logger.warning("regime_request_failed", error=str(exc))
         return {
             "success": True,
-            "data": {
-                "NIFTY": "UNKNOWN",
-                "BANKNIFTY": "UNKNOWN",
-                "FINNIFTY": "UNKNOWN",
-            },
+            "data": default_regime,
         }

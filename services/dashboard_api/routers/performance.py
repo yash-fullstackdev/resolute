@@ -38,12 +38,14 @@ def _error(code: str, message: str, status: int, details: dict | None = None) ->
 @router.get("")
 async def get_performance(
     request: Request,
+    days: int = Query(default=30, le=365, ge=1),
     period_start: date | None = Query(None, description="Start date for period filter"),
     period_end: date | None = Query(None, description="End date for period filter"),
 ):
     """
     Get P&L summary for the authenticated tenant.
     Includes total P&L, win rate, average win/loss, max drawdown.
+    Accepts either `days` (integer lookback) or explicit `period_start`/`period_end`.
     """
     tenant_id = request.state.tenant_id
 
@@ -67,6 +69,9 @@ async def get_performance(
             if period_start:
                 query += " AND entry_time >= :period_start"
                 params["period_start"] = period_start.isoformat()
+            elif days:
+                query += " AND entry_time >= NOW() - INTERVAL :days_interval"
+                params["days_interval"] = f"{days} days"
 
             if period_end:
                 query += " AND entry_time <= :period_end"
@@ -87,7 +92,11 @@ async def get_performance(
 
     total_trades = row["total_trades"] or 0
     winning_trades = row["winning_trades"] or 0
+    losing_trades = row["losing_trades"] or 0
     win_rate = (winning_trades / total_trades * 100) if total_trades > 0 else 0.0
+    avg_win = float(row["avg_win_inr"])
+    avg_loss = abs(float(row["avg_loss_inr"]))
+    profit_factor = round(avg_win / avg_loss, 2) if avg_loss > 0 else 0.0
 
     logger.info("performance_retrieved", tenant_id=tenant_id)
 
@@ -99,16 +108,16 @@ async def get_performance(
             "unrealised_pnl_inr": float(row["unrealised_pnl_inr"]),
             "total_trades": total_trades,
             "winning_trades": winning_trades,
-            "losing_trades": row["losing_trades"] or 0,
+            "losing_trades": losing_trades,
             "win_rate": round(win_rate, 2),
-            "avg_win_inr": round(float(row["avg_win_inr"]), 2),
-            "avg_loss_inr": round(float(row["avg_loss_inr"]), 2),
-            "max_drawdown_pct": 0,
-            "avg_return_pct": 0,
-            "best_day": {"date": "N/A", "pnl": 0},
-            "worst_day": {"date": "N/A", "pnl": 0},
-            "sharpe_ratio": None,
-            "profit_factor": None,
+            "avg_win_inr": round(avg_win, 2),
+            "avg_loss_inr": round(avg_loss, 2),
+            "max_drawdown_pct": 0.0,
+            "avg_return_pct": 0.0,
+            "best_day": 0.0,
+            "worst_day": 0.0,
+            "sharpe_ratio": 0.0,
+            "profit_factor": profit_factor,
             "period_start": period_start.isoformat() if period_start else None,
             "period_end": period_end.isoformat() if period_end else None,
         },
@@ -157,6 +166,8 @@ async def get_daily_performance(
             {
                 "date": str(r["date"]),
                 "pnl": float(r["pnl_inr"]),
+                "trades": int(r["trades"]),
+                "win_rate": 0.0,
             }
             for r in rows
         ],

@@ -241,28 +241,43 @@ async def list_strategies(request: Request):
     tenant_id = request.state.tenant_id
     tier = request.state.tier
 
-    built_in = [
-        {"id": "long_call", "name": "Long Call", "category": "BUYING", "type": "BUILT_IN", "enabled": False, "min_tier": "STARTER"},
-        {"id": "long_put", "name": "Long Put", "category": "BUYING", "type": "BUILT_IN", "enabled": False, "min_tier": "STARTER"},
-        {"id": "long_straddle", "name": "Long Straddle", "category": "BUYING", "type": "BUILT_IN", "enabled": False, "min_tier": "STARTER"},
-        {"id": "long_strangle", "name": "Long Strangle", "category": "BUYING", "type": "BUILT_IN", "enabled": False, "min_tier": "STARTER"},
-        {"id": "bull_call_spread", "name": "Bull Call Spread", "category": "BUYING", "type": "BUILT_IN", "enabled": False, "min_tier": "STARTER"},
-        {"id": "bear_put_spread", "name": "Bear Put Spread", "category": "BUYING", "type": "BUILT_IN", "enabled": False, "min_tier": "STARTER"},
-        {"id": "rsi_reversal", "name": "RSI Reversal Buyer", "category": "BUYING", "type": "BUILT_IN", "enabled": False, "min_tier": "STARTER"},
-        {"id": "supertrend_momentum", "name": "SuperTrend Momentum", "category": "BUYING", "type": "BUILT_IN", "enabled": False, "min_tier": "STARTER"},
-        {"id": "covered_call", "name": "Covered Call", "category": "HYBRID", "type": "BUILT_IN", "enabled": False, "min_tier": "GROWTH"},
-        {"id": "collar", "name": "Collar", "category": "HYBRID", "type": "BUILT_IN", "enabled": False, "min_tier": "GROWTH"},
-        {"id": "protective_put", "name": "Protective Put", "category": "HYBRID", "type": "BUILT_IN", "enabled": False, "min_tier": "GROWTH"},
-        {"id": "short_straddle", "name": "Short Straddle", "category": "SELLING", "type": "BUILT_IN", "enabled": False, "min_tier": "PRO"},
-        {"id": "short_strangle", "name": "Short Strangle", "category": "SELLING", "type": "BUILT_IN", "enabled": False, "min_tier": "PRO"},
-        {"id": "iron_condor", "name": "Iron Condor", "category": "SELLING", "type": "BUILT_IN", "enabled": False, "min_tier": "PRO"},
-        {"id": "iron_butterfly", "name": "Iron Butterfly", "category": "SELLING", "type": "BUILT_IN", "enabled": False, "min_tier": "PRO"},
-        {"id": "jade_lizard", "name": "Jade Lizard", "category": "SELLING", "type": "BUILT_IN", "enabled": False, "min_tier": "PRO"},
-        {"id": "ratio_spread", "name": "Ratio Spread", "category": "SELLING", "type": "BUILT_IN", "enabled": False, "min_tier": "PRO"},
-        {"id": "calendar_spread", "name": "Calendar Spread", "category": "SELLING", "type": "BUILT_IN", "enabled": False, "min_tier": "PRO"},
+    built_in_defs = [
+        ("long_call", "Long Call", "BUYING", "STARTER", "Buy call options on bullish signals"),
+        ("long_put", "Long Put", "BUYING", "STARTER", "Buy put options on bearish signals"),
+        ("long_straddle", "Long Straddle", "BUYING", "STARTER", "Buy both call and put at ATM strike for volatility plays"),
+        ("long_strangle", "Long Strangle", "BUYING", "STARTER", "Buy OTM call and put for cheaper volatility exposure"),
+        ("bull_call_spread", "Bull Call Spread", "BUYING", "STARTER", "Buy lower strike call, sell higher strike call"),
+        ("bear_put_spread", "Bear Put Spread", "BUYING", "STARTER", "Buy higher strike put, sell lower strike put"),
+        ("rsi_reversal", "RSI Reversal Buyer", "BUYING", "STARTER", "Buy on RSI oversold/overbought reversals with MACD confirmation"),
+        ("supertrend_momentum", "SuperTrend Momentum", "BUYING", "STARTER", "Follow SuperTrend buy signals with volume confirmation"),
+        ("covered_call", "Covered Call", "HYBRID", "GROWTH", "Hold underlying and sell OTM calls for income"),
+        ("collar", "Collar", "HYBRID", "GROWTH", "Protective put + covered call for hedged positions"),
+        ("protective_put", "Protective Put", "HYBRID", "GROWTH", "Buy puts to protect long underlying positions"),
+        ("short_straddle", "Short Straddle", "SELLING", "PRO", "Sell ATM call and put for premium in range-bound markets"),
+        ("short_strangle", "Short Strangle", "SELLING", "PRO", "Sell OTM call and put for wider range premium collection"),
+        ("iron_condor", "Iron Condor", "SELLING", "PRO", "Sell OTM strangle with protective wings for defined risk"),
+        ("iron_butterfly", "Iron Butterfly", "SELLING", "PRO", "Sell ATM straddle with protective wings"),
+        ("jade_lizard", "Jade Lizard", "SELLING", "PRO", "Short put + short call spread for upside-protected premium"),
+        ("ratio_spread", "Ratio Spread", "SELLING", "PRO", "Buy one option, sell multiple at different strike"),
+        ("calendar_spread", "Calendar Spread", "SELLING", "PRO", "Sell near-term, buy far-term same strike for time decay"),
     ]
 
-    return {"data": built_in}
+    built_in = [
+        {
+            "id": sid,
+            "name": name,
+            "display_name": name,
+            "description": desc,
+            "category": cat,
+            "min_capital_tier": tier_req,
+            "enabled": False,
+            "is_custom": False,
+            "params": [],
+        }
+        for sid, name, cat, tier_req, desc in built_in_defs
+    ]
+
+    return {"success": True, "data": built_in}
 
 
 @router.patch("/{strategy_id}")

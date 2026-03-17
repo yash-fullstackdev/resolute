@@ -79,7 +79,8 @@ async def list_journal_entries(
     logger.info("journal_listed", tenant_id=tenant_id, count=len(rows), page=page)
 
     return {
-        "entries": [dict(r) for r in rows],
+        "success": True,
+        "data": [dict(r) for r in rows],
         "total": total,
         "page": page,
         "page_size": page_size,
