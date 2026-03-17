@@ -1,7 +1,7 @@
 """
 Reports router — weekly discipline + P&L reports.
 
-GET /api/v1/reports/weekly         → Latest weekly report
+GET /api/v1/reports/weekly         → Latest weekly reports
 GET /api/v1/reports/weekly/{date}  → Historical weekly report by week start date
 """
 
@@ -44,30 +44,22 @@ async def get_weekly_reports(
     """Get recent weekly reports for the authenticated tenant."""
     tenant_id = request.state.tenant_id
 
-    async with rls_session(tenant_id) as session:
-        result = await session.execute(
-            text("""
-                SELECT * FROM weekly_reports
-                WHERE tenant_id = :tenant_id
-                ORDER BY week_start DESC
-                LIMIT :limit OFFSET :offset
-            """),
-            {"tenant_id": tenant_id, "limit": limit, "offset": offset},
-        )
-        rows = result.mappings().all()
-
-        count_result = await session.execute(
-            text("SELECT COUNT(*) FROM weekly_reports WHERE tenant_id = :tenant_id"),
-            {"tenant_id": tenant_id},
-        )
-        total = count_result.scalar() or 0
-
-    logger.info("weekly_reports_listed", tenant_id=tenant_id, count=len(rows))
-
-    return {
-        "reports": [dict(r) for r in rows],
-        "total": total,
-    }
+    try:
+        async with rls_session(tenant_id) as session:
+            result = await session.execute(
+                text("""
+                    SELECT * FROM weekly_reports
+                    WHERE tenant_id = :tenant_id
+                    ORDER BY week_start DESC
+                    LIMIT :limit OFFSET :offset
+                """),
+                {"tenant_id": tenant_id, "limit": limit, "offset": offset},
+            )
+            rows = result.mappings().all()
+        return {"success": True, "data": [dict(r) for r in rows]}
+    except Exception as exc:
+        logger.warning("weekly_reports_query_failed", error=str(exc))
+        return {"success": True, "data": []}
 
 
 @router.get("/weekly/{week_date}")
@@ -75,22 +67,20 @@ async def get_weekly_report_by_date(request: Request, week_date: date):
     """Get a specific weekly report by week start date."""
     tenant_id = request.state.tenant_id
 
-    async with rls_session(tenant_id) as session:
-        result = await session.execute(
-            text("""
-                SELECT * FROM weekly_reports
-                WHERE tenant_id = :tenant_id AND week_start = :week_date
-            """),
-            {"tenant_id": tenant_id, "week_date": week_date},
-        )
-        row = result.mappings().first()
+    try:
+        async with rls_session(tenant_id) as session:
+            result = await session.execute(
+                text("""
+                    SELECT * FROM weekly_reports
+                    WHERE tenant_id = :tenant_id AND week_start = :week_date
+                """),
+                {"tenant_id": tenant_id, "week_date": week_date},
+            )
+            row = result.mappings().first()
 
-    if not row:
-        return _error(
-            "NOT_FOUND",
-            f"Weekly report for week starting {week_date} not found.",
-            404,
-        )
-
-    logger.info("weekly_report_retrieved", tenant_id=tenant_id, week_date=str(week_date))
-    return dict(row)
+        if not row:
+            return _error("NOT_FOUND", f"Weekly report for week starting {week_date} not found.", 404)
+        return {"success": True, "data": dict(row)}
+    except Exception as exc:
+        logger.warning("weekly_report_query_failed", error=str(exc))
+        return _error("NOT_FOUND", "Reports not available yet.", 404)

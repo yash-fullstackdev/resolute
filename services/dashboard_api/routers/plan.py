@@ -71,7 +71,7 @@ async def get_todays_plan(request: Request):
         row = result.mappings().first()
 
     if not row:
-        return _error("NOT_FOUND", "No plan for today. Create one before market open.", 404)
+        return {"success": True, "data": None}
 
     logger.info("plan_retrieved", tenant_id=tenant_id, date=str(today))
     plan = dict(row)

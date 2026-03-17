@@ -58,20 +58,19 @@ async def get_chain(request: Request, underlying: str):
         chain_data = json.loads(response.data.decode())
         logger.info("chain_retrieved", underlying=underlying, segment=segment)
         return chain_data
-    except TimeoutError:
-        logger.warning("chain_request_timeout", underlying=underlying, subject=subject)
-        return _error(
-            "SERVICE_UNAVAILABLE",
-            f"Chain data for {underlying} is not available. Signal engine may be down.",
-            503,
-        )
     except Exception as exc:
-        logger.error("chain_request_failed", underlying=underlying, error=str(exc))
-        return _error(
-            "SERVICE_UNAVAILABLE",
-            f"Failed to fetch chain data for {underlying}.",
-            503,
-        )
+        logger.warning("chain_request_failed", underlying=underlying, error=str(exc))
+        return {
+            "success": True,
+            "data": {
+                "underlying": underlying,
+                "spot_price": 0,
+                "expiry": "",
+                "strikes": [],
+                "pcr": 0,
+                "message": "Chain data not available. Signal engine may not be processing this underlying yet.",
+            },
+        }
 
 
 @router.get("/regime")
@@ -109,17 +108,13 @@ async def get_regime(request: Request):
             pass
 
         return {"regimes": regime_data}
-    except TimeoutError:
-        logger.warning("regime_request_timeout")
-        return _error(
-            "SERVICE_UNAVAILABLE",
-            "Market regime data is not available.",
-            503,
-        )
     except Exception as exc:
-        logger.error("regime_request_failed", error=str(exc))
-        return _error(
-            "SERVICE_UNAVAILABLE",
-            "Failed to fetch market regime data.",
-            503,
-        )
+        logger.warning("regime_request_failed", error=str(exc))
+        return {
+            "success": True,
+            "data": {
+                "NIFTY": "UNKNOWN",
+                "BANKNIFTY": "UNKNOWN",
+                "FINNIFTY": "UNKNOWN",
+            },
+        }
