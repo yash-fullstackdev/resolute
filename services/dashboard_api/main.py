@@ -49,6 +49,7 @@ from .routers import (
     signals,
     strategies,
     user,
+    watchlist,
 )
 from .socketio_server import sio, create_sio_app
 
@@ -336,6 +337,7 @@ app.include_router(chain.router)
 app.include_router(strategies.router)
 app.include_router(admin.router)
 app.include_router(user.router)
+app.include_router(watchlist.router)
 
 # ── Socket.IO Mount ──────────────────────────────────────────────────────────
 
