@@ -314,9 +314,20 @@ func classifySegment(symbol string) string {
 // createFeedProvider instantiates the appropriate feed provider.
 func createFeedProvider(broker string, symbols []feed.SymbolConfig, mapping *feed.SymbolMapping, cfg *Config) feed.FeedProvider {
 	switch broker {
-	case "zerodha", "dhan":
-		// For now, both broker types fall through to paper mode with a log warning.
-		// Production: instantiate actual broker WebSocket providers here.
+	case "dhan":
+		accessToken := cfg.FeedGateway.AccessToken
+		if accessToken == "" {
+			accessToken = os.Getenv("FEED_ACCESS_TOKEN")
+		}
+		clientID := os.Getenv("FEED_CLIENT_ID")
+		if accessToken == "" {
+			log.Warn().Msg("dhan access token not configured, falling back to paper feed")
+			return feed.NewPaperFeedProvider(symbols)
+		}
+		log.Info().Str("broker", "dhan").Msg("using Dhan LTP feed provider")
+		return feed.NewDhanFeedProvider(accessToken, clientID, symbols)
+	case "zerodha":
+		// Zerodha integration not yet implemented.
 		log.Warn().Str("broker", broker).Msg("broker integration not yet implemented, falling back to paper feed")
 		return feed.NewPaperFeedProvider(symbols)
 	case "paper":
