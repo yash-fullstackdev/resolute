@@ -1,6 +1,6 @@
 export const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000/api/v1";
 export const AUTH_URL = process.env.NEXT_PUBLIC_AUTH_URL ?? "http://localhost:8001/auth/v1";
-export const WS_URL = process.env.NEXT_PUBLIC_WS_URL ?? "ws://localhost:8000/ws";
+export const WS_URL = process.env.NEXT_PUBLIC_WS_URL ?? "http://localhost:8000";
 
 export const STRATEGY_NAMES: Record<string, string> = {
   long_call: "Long Call",
