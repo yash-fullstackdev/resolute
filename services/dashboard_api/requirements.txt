@@ -26,6 +26,9 @@ pydantic[email]
 structlog==24.4.0
 prometheus-client==0.21.1
 
+# Socket.IO
+python-socketio[asyncio]==5.11.0
+
 # ASGI middleware
 starlette==0.41.3
 

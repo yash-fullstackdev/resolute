@@ -29,7 +29,7 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
 # - workers=1 because we use async (event loop handles concurrency)
 # - limit-concurrency to prevent resource exhaustion
 # - access-log disabled (structlog handles logging)
-CMD ["uvicorn", "dashboard_api.main:app", \
+CMD ["uvicorn", "dashboard_api.main:combined_app", \
      "--host", "0.0.0.0", \
      "--port", "8000", \
      "--workers", "1", \

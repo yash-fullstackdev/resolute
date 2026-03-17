@@ -50,6 +50,7 @@ from .routers import (
     strategies,
     user,
 )
+from .socketio_server import sio, create_sio_app
 
 # ── Structlog Configuration ─────────────────────────────────────────────────
 
@@ -335,6 +336,13 @@ app.include_router(chain.router)
 app.include_router(strategies.router)
 app.include_router(admin.router)
 app.include_router(user.router)
+
+# ── Socket.IO Mount ──────────────────────────────────────────────────────────
+
+app.state.sio = sio
+
+# Wrap FastAPI with Socket.IO — sio handles /socket.io/, rest falls through to FastAPI
+combined_app = create_sio_app(other_app=app)
 
 
 # ── Prometheus Metrics Endpoint ──────────────────────────────────────────────
