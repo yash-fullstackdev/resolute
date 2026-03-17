@@ -4,6 +4,7 @@ import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiClient } from "@/lib/api";
 import { StrategyCard } from "@/components/strategy/StrategyCard";
+import { StrategyConfigModal } from "@/components/strategy/StrategyConfigModal";
 import type { Strategy, StrategyCategory } from "@/types/strategy";
 import type { ApiResponse } from "@/types/api";
 import { Layers, Plus } from "lucide-react";
@@ -12,12 +13,14 @@ import Link from "next/link";
 const CATEGORIES: Array<{ value: StrategyCategory | "ALL"; label: string }> = [
   { value: "ALL", label: "All" },
   { value: "BUYING", label: "Buying" },
+  { value: "TECHNICAL", label: "Technical" },
   { value: "SELLING", label: "Selling" },
   { value: "HYBRID", label: "Hybrid" },
 ];
 
 export default function StrategiesPage() {
   const [categoryFilter, setCategoryFilter] = useState<StrategyCategory | "ALL">("ALL");
+  const [configStrategy, setConfigStrategy] = useState<Strategy | null>(null);
   const queryClient = useQueryClient();
 
   const { data: strategies, isLoading } = useQuery<Strategy[]>({
@@ -41,6 +44,10 @@ export default function StrategiesPage() {
     toggleMutation.mutate({ strategyId, enabled });
   };
 
+  const handleConfigure = (strategy: Strategy) => {
+    setConfigStrategy(strategy);
+  };
+
   const filtered =
     categoryFilter === "ALL"
       ? (strategies ?? [])
@@ -51,7 +58,7 @@ export default function StrategiesPage() {
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h1 className="text-2xl font-bold text-white">Strategies</h1>
-          <p className="mt-1 text-sm text-slate-400">Configure built-in and custom strategies</p>
+          <p className="mt-1 text-sm text-slate-400">Click a strategy to configure instruments and parameters</p>
         </div>
         <Link
           href="/strategies/builder"
@@ -91,6 +98,7 @@ export default function StrategiesPage() {
               key={strategy.id}
               strategy={strategy}
               onToggle={handleToggle}
+              onConfigure={handleConfigure}
             />
           ))}
         </div>
@@ -101,6 +109,14 @@ export default function StrategiesPage() {
             <p className="mt-2 text-sm text-slate-400">No strategies found</p>
           </div>
         </div>
+      )}
+
+      {/* Config Modal */}
+      {configStrategy && (
+        <StrategyConfigModal
+          strategy={configStrategy}
+          onClose={() => setConfigStrategy(null)}
+        />
       )}
     </div>
   );

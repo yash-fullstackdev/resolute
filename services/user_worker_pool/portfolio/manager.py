@@ -65,22 +65,32 @@ class PortfolioManager:
             return
 
         try:
-            # Load portfolio value
+            # Load portfolio value from user_strategy_configs (any row for this tenant)
             row = await self._db.fetchrow(
-                "SELECT portfolio_value_inr FROM user_profiles WHERE tenant_id = $1",
+                """
+                SELECT portfolio_value_inr
+                FROM user_strategy_configs
+                WHERE tenant_id = $1
+                ORDER BY updated_at DESC
+                LIMIT 1
+                """,
                 self._tenant_id,
                 tenant_id=self._tenant_id,
             )
             if row:
                 self._portfolio_value_inr = float(row["portfolio_value_inr"])
 
-            # Load open positions
+            # Load open positions (map schema columns to dataclass fields via aliases)
             position_rows = await self._db.fetch(
                 """
-                SELECT position_id, strategy_name, underlying, segment,
-                       entry_time, entry_cost_inr, current_value_inr,
+                SELECT id AS position_id,
+                       strategy AS strategy_name,
+                       underlying, segment,
+                       entry_time,
+                       COALESCE(entry_cost_inr, 0) AS entry_cost_inr,
+                       COALESCE(entry_cost_inr, 0) AS current_value_inr,
                        stop_loss_price, target_price, time_stop,
-                       lots, status
+                       1 AS lots, status
                 FROM positions
                 WHERE tenant_id = $1 AND status = 'OPEN'
                 """,
@@ -90,7 +100,7 @@ class PortfolioManager:
 
             for row in position_rows:
                 position = Position(
-                    position_id=row["position_id"],
+                    position_id=str(row["position_id"]),
                     tenant_id=self._tenant_id,
                     strategy_name=row["strategy_name"],
                     underlying=row["underlying"],
@@ -112,7 +122,7 @@ class PortfolioManager:
                 """
                 SELECT COALESCE(SUM(realised_pnl_inr), 0) AS total_pnl
                 FROM trade_journal
-                WHERE user_id = $1 AND trade_date = CURRENT_DATE
+                WHERE tenant_id = $1 AND trade_date = CURRENT_DATE
                 """,
                 self._tenant_id,
                 tenant_id=self._tenant_id,
@@ -241,29 +251,36 @@ class PortfolioManager:
         if self._db is None:
             return
         try:
+            import json as _json
+            legs_json = _json.dumps([
+                {"option_type": l.option_type, "strike": l.strike,
+                 "expiry": l.expiry.isoformat(), "action": l.action,
+                 "lots": l.lots, "premium": l.premium}
+                for l in position.legs
+            ])
             await self._db.execute(
                 """
                 INSERT INTO positions
-                    (position_id, tenant_id, strategy_name, underlying, segment,
-                     entry_time, entry_cost_inr, current_value_inr,
-                     stop_loss_price, target_price, time_stop, lots, status,
-                     exit_time, exit_value_inr, exit_reason, pnl_inr)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13,
-                        $14, $15, $16, $17)
-                ON CONFLICT (position_id) DO UPDATE SET
-                    current_value_inr = EXCLUDED.current_value_inr,
+                    (id, tenant_id, strategy, underlying, segment,
+                     entry_time, entry_cost_inr,
+                     stop_loss_price, target_price, time_stop,
+                     legs, status,
+                     exit_time, exit_value_inr, exit_reason, realised_pnl_inr)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
+                        $11::jsonb, $12, $13, $14, $15, $16)
+                ON CONFLICT (id) DO UPDATE SET
                     status = EXCLUDED.status,
                     exit_time = EXCLUDED.exit_time,
                     exit_value_inr = EXCLUDED.exit_value_inr,
                     exit_reason = EXCLUDED.exit_reason,
-                    pnl_inr = EXCLUDED.pnl_inr
+                    realised_pnl_inr = EXCLUDED.realised_pnl_inr
                 """,
                 position.position_id, position.tenant_id,
                 position.strategy_name, position.underlying, position.segment,
                 position.entry_time, position.entry_cost_inr,
-                position.current_value_inr, position.stop_loss_price,
-                position.target_price, position.time_stop, position.lots,
-                position.status, position.exit_time, position.exit_value_inr,
+                position.stop_loss_price, position.target_price, position.time_stop,
+                legs_json, position.status,
+                position.exit_time, position.exit_value_inr,
                 position.exit_reason, position.pnl_inr,
                 tenant_id=position.tenant_id,
             )

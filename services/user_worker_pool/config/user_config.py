@@ -125,6 +125,7 @@ class UserStrategyConfig:
     portfolio_value_inr: float = 50_000.0
     strategies: dict[str, dict[str, Any]] = field(default_factory=dict)
     enabled_strategy_names: list[str] = field(default_factory=list)
+    strategy_instruments: dict[str, list[str]] = field(default_factory=dict)
 
     def get_strategy_config(self, strategy_name: str) -> dict[str, Any]:
         """Get merged config for a specific strategy."""
@@ -132,6 +133,10 @@ class UserStrategyConfig:
         overrides = self.strategies.get(strategy_name, {})
         merged = {**defaults, **overrides}
         return merged
+
+    def get_strategy_instruments(self, strategy_name: str) -> list[str]:
+        """Get instruments this strategy should monitor (empty = all)."""
+        return self.strategy_instruments.get(strategy_name, [])
 
     def is_strategy_enabled(self, strategy_name: str) -> bool:
         """Check if a strategy is enabled for this user."""
@@ -158,23 +163,12 @@ class UserConfigLoader:
 
         if self._db is not None:
             try:
-                # Load portfolio value
-                user_row = await self._db.fetchrow(
-                    """
-                    SELECT portfolio_value_inr
-                    FROM user_profiles
-                    WHERE tenant_id = $1
-                    """,
-                    tenant_id,
-                    tenant_id=tenant_id,
-                )
-                if user_row:
-                    config.portfolio_value_inr = float(user_row["portfolio_value_inr"])
+                import json as _json
 
-                # Load strategy configs
+                # Load strategy configs (params column, not config_json)
                 rows = await self._db.fetch(
                     """
-                    SELECT strategy_name, config_json, enabled
+                    SELECT strategy_name, params, enabled, portfolio_value_inr
                     FROM user_strategy_configs
                     WHERE tenant_id = $1
                     """,
@@ -184,11 +178,25 @@ class UserConfigLoader:
 
                 for row in rows:
                     strategy_name = row["strategy_name"]
-                    import json
                     try:
-                        user_overrides = json.loads(row["config_json"]) if row["config_json"] else {}
-                    except (json.JSONDecodeError, TypeError):
+                        raw = row["params"]
+                        if isinstance(raw, str):
+                            user_overrides = _json.loads(raw)
+                        elif isinstance(raw, dict):
+                            user_overrides = dict(raw)
+                        else:
+                            user_overrides = {}
+                    except (ValueError, TypeError):
                         user_overrides = {}
+
+                    # Extract instruments (stored inside params JSONB)
+                    instruments = user_overrides.pop("instruments", [])
+                    if isinstance(instruments, list):
+                        config.strategy_instruments[strategy_name] = instruments
+
+                    # Take portfolio_value_inr from any strategy row (they share same value)
+                    if row["portfolio_value_inr"]:
+                        config.portfolio_value_inr = float(row["portfolio_value_inr"])
 
                     user_overrides["enabled"] = row["enabled"]
                     config.strategies[strategy_name] = user_overrides

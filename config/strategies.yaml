@@ -109,6 +109,104 @@ mcx_crude_put:
   no_overnight_near_opec: true      # Block new positions within 1 day of OPEC meeting
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# TECHNICAL strategies (STARTER tier — candle-based, indicator-driven entries)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+ttm_squeeze:
+  enabled: true
+  category: BUYING
+  min_capital_tier: STARTER
+  allowed_segments: [NSE_INDEX, NSE_FO]
+  bb_period: 20
+  bb_std: 2.0
+  kc_period: 20
+  kc_atr_period: 10
+  kc_mult: 1.5
+  stop_loss_pct: 40
+  target_pct: 80
+  instruments: [NIFTY, BANKNIFTY]
+
+supertrend_strategy:
+  enabled: true
+  category: BUYING
+  min_capital_tier: STARTER
+  allowed_segments: [NSE_INDEX, NSE_FO]
+  period: 10
+  multiplier: 3.0
+  stop_loss_pct: 40
+  target_pct: 80
+  instruments: [NIFTY, BANKNIFTY]
+
+vwap_supertrend:
+  enabled: true
+  category: BUYING
+  min_capital_tier: STARTER
+  allowed_segments: [NSE_INDEX, NSE_FO]
+  st_period: 10
+  st_multiplier: 3.0
+  vwap_proximity_pct: 0.0015
+  vol_threshold: 1.1
+  max_fires_per_day: 2
+  stop_loss_pct: 40
+  target_pct: 80
+  instruments: [NIFTY, BANKNIFTY]
+
+ema_breakdown:
+  enabled: true
+  category: BUYING
+  min_capital_tier: STARTER
+  allowed_segments: [NSE_INDEX, NSE_FO]
+  ema_short: 2
+  ema_long: 11
+  rsi_period: 14
+  breakaway_pct: 0.0008
+  max_fires_per_day: 3
+  stop_loss_pct: 40
+  target_pct: 80
+  instruments: [NIFTY, BANKNIFTY]
+
+rsi_vwap_scalp:
+  enabled: true
+  category: BUYING
+  min_capital_tier: STARTER
+  allowed_segments: [NSE_INDEX, NSE_FO]
+  rsi_period: 14
+  rsi_oversold: 30
+  rsi_overbought: 70
+  max_fires_per_day: 3
+  stop_loss_pct: 30
+  target_pct: 50
+  instruments: [NIFTY, BANKNIFTY]
+
+ema33_ob:
+  enabled: true
+  category: BUYING
+  min_capital_tier: STARTER
+  allowed_segments: [NSE_INDEX, NSE_FO]
+  ema_period: 33
+  rsi_period: 14
+  rsi_bull_threshold: 60
+  rsi_bear_threshold: 40
+  pullback_atr_mult: 0.5
+  rejection_body_pct: 0.0004
+  max_fires_per_day: 3
+  stop_loss_pct: 40
+  target_pct: 100
+  instruments: [NIFTY, BANKNIFTY]
+
+smc_order_block:
+  enabled: true
+  category: BUYING
+  min_capital_tier: STARTER
+  allowed_segments: [NSE_INDEX, NSE_FO]
+  ob_length: 6
+  fvg_threshold: 0.0005
+  max_fires_per_day: 5
+  stop_loss_pct: 40
+  target_pct: 100
+  instruments: [NIFTY, BANKNIFTY]
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # HYBRID strategies (GROWTH tier, ₹50k+ capital required)
 # ═══════════════════════════════════════════════════════════════════════════════
 

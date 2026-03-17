@@ -31,6 +31,7 @@ from ..models.schemas import (
     AIReviewRequest,
     BacktestRequest,
     CustomStrategyInput,
+    StrategyConfigUpdateInput,
 )
 
 logger = structlog.get_logger(service="dashboard_api", module="strategies")
@@ -260,42 +261,253 @@ async def list_strategies(request: Request):
         ("jade_lizard", "Jade Lizard", "SELLING", "PRO", "Short put + short call spread for upside-protected premium"),
         ("ratio_spread", "Ratio Spread", "SELLING", "PRO", "Buy one option, sell multiple at different strike"),
         ("calendar_spread", "Calendar Spread", "SELLING", "PRO", "Sell near-term, buy far-term same strike for time decay"),
+        # TECHNICAL — candle-based strategies using indicators on 1m/5m data
+        ("ttm_squeeze", "TTM Squeeze", "TECHNICAL", "STARTER", "Momentum breakout when Bollinger Bands squeeze inside Keltner Channels — fires on release with momentum confirmation"),
+        ("supertrend_strategy", "Supertrend", "TECHNICAL", "STARTER", "Trend-following entry on Supertrend direction flip — catches major trend changes using ATR-based trailing bands"),
+        ("vwap_supertrend", "VWAP + Supertrend Combo", "TECHNICAL", "STARTER", "High-conviction entry combining VWAP proximity with Supertrend direction and volume surge confirmation"),
+        ("ema_breakdown", "EMA Breakdown", "TECHNICAL", "STARTER", "EMA 2/11 crossover or strong continuation with RSI momentum and volume confirmation — catches trends early"),
+        ("rsi_vwap_scalp", "RSI VWAP Scalp", "TECHNICAL", "STARTER", "Mean-reversion scalp at VWAP bands — buys RSI oversold at lower band, sells overbought at upper band"),
+        ("ema33_ob", "33 EMA Option Buying", "TECHNICAL", "STARTER", "Sankalp Chaturvedi methodology — 33 EMA pullback-rejection with RSI zone filter and VWAP confirmation"),
+        ("smc_order_block", "SMC Order Block", "TECHNICAL", "STARTER", "Smart Money Concepts — enters at institutional Order Blocks after Break of Structure with FVG and sweep confluence"),
     ]
 
-    built_in = [
-        {
+    # Configurable params for technical strategies (shown on UI)
+    technical_params = {
+        "ttm_squeeze": [
+            {"name": "bb_period", "type": "number", "default_value": 20, "current_value": 20, "description": "Bollinger Bands lookback period", "min": 5, "max": 50},
+            {"name": "bb_std", "type": "number", "default_value": 2.0, "current_value": 2.0, "description": "Bollinger Bands std deviation multiplier", "min": 0.5, "max": 5.0},
+            {"name": "kc_mult", "type": "number", "default_value": 1.5, "current_value": 1.5, "description": "Keltner Channel ATR multiplier", "min": 0.5, "max": 5.0},
+            {"name": "stop_loss_pct", "type": "number", "default_value": 40, "current_value": 40, "description": "Stop loss (% of premium)", "min": 10, "max": 80},
+            {"name": "target_pct", "type": "number", "default_value": 80, "current_value": 80, "description": "Target profit (% of premium)", "min": 20, "max": 300},
+        ],
+        "supertrend_strategy": [
+            {"name": "period", "type": "number", "default_value": 10, "current_value": 10, "description": "Supertrend ATR period", "min": 3, "max": 50},
+            {"name": "multiplier", "type": "number", "default_value": 3.0, "current_value": 3.0, "description": "Supertrend ATR multiplier", "min": 1.0, "max": 10.0},
+            {"name": "stop_loss_pct", "type": "number", "default_value": 40, "current_value": 40, "description": "Stop loss (% of premium)", "min": 10, "max": 80},
+            {"name": "target_pct", "type": "number", "default_value": 80, "current_value": 80, "description": "Target profit (% of premium)", "min": 20, "max": 300},
+        ],
+        "vwap_supertrend": [
+            {"name": "st_period", "type": "number", "default_value": 10, "current_value": 10, "description": "Supertrend ATR period", "min": 3, "max": 50},
+            {"name": "st_multiplier", "type": "number", "default_value": 3.0, "current_value": 3.0, "description": "Supertrend ATR multiplier", "min": 1.0, "max": 10.0},
+            {"name": "vwap_proximity_pct", "type": "number", "default_value": 0.15, "current_value": 0.15, "description": "Max distance from VWAP (%)", "min": 0.05, "max": 1.0},
+            {"name": "vol_threshold", "type": "number", "default_value": 1.1, "current_value": 1.1, "description": "Min volume ratio vs 20-bar avg", "min": 0.5, "max": 3.0},
+            {"name": "max_fires_per_day", "type": "number", "default_value": 2, "current_value": 2, "description": "Max signals per day", "min": 1, "max": 10},
+        ],
+        "ema_breakdown": [
+            {"name": "ema_short", "type": "number", "default_value": 2, "current_value": 2, "description": "Fast EMA period", "min": 2, "max": 20},
+            {"name": "ema_long", "type": "number", "default_value": 11, "current_value": 11, "description": "Slow EMA period", "min": 5, "max": 50},
+            {"name": "rsi_period", "type": "number", "default_value": 14, "current_value": 14, "description": "RSI lookback period", "min": 5, "max": 30},
+            {"name": "max_fires_per_day", "type": "number", "default_value": 3, "current_value": 3, "description": "Max signals per day", "min": 1, "max": 10},
+            {"name": "stop_loss_pct", "type": "number", "default_value": 40, "current_value": 40, "description": "Stop loss (% of premium)", "min": 10, "max": 80},
+        ],
+        "rsi_vwap_scalp": [
+            {"name": "rsi_period", "type": "number", "default_value": 14, "current_value": 14, "description": "RSI lookback period", "min": 5, "max": 30},
+            {"name": "rsi_oversold", "type": "number", "default_value": 30, "current_value": 30, "description": "RSI oversold threshold (BUY)", "min": 15, "max": 40},
+            {"name": "rsi_overbought", "type": "number", "default_value": 70, "current_value": 70, "description": "RSI overbought threshold (SELL)", "min": 60, "max": 85},
+            {"name": "max_fires_per_day", "type": "number", "default_value": 3, "current_value": 3, "description": "Max signals per day", "min": 1, "max": 10},
+            {"name": "stop_loss_pct", "type": "number", "default_value": 30, "current_value": 30, "description": "Stop loss (% of premium)", "min": 10, "max": 60},
+        ],
+        "ema33_ob": [
+            {"name": "ema_period", "type": "number", "default_value": 33, "current_value": 33, "description": "EMA period", "min": 10, "max": 100},
+            {"name": "rsi_bull_threshold", "type": "number", "default_value": 60, "current_value": 60, "description": "RSI bullish zone threshold", "min": 50, "max": 75},
+            {"name": "rsi_bear_threshold", "type": "number", "default_value": 40, "current_value": 40, "description": "RSI bearish zone threshold", "min": 25, "max": 50},
+            {"name": "pullback_atr_mult", "type": "number", "default_value": 0.5, "current_value": 0.5, "description": "Pullback distance (x ATR)", "min": 0.2, "max": 2.0},
+            {"name": "max_fires_per_day", "type": "number", "default_value": 3, "current_value": 3, "description": "Max signals per day", "min": 1, "max": 10},
+        ],
+        "smc_order_block": [
+            {"name": "ob_length", "type": "number", "default_value": 6, "current_value": 6, "description": "Swing pivot lookback bars", "min": 3, "max": 15},
+            {"name": "fvg_threshold", "type": "number", "default_value": 0.05, "current_value": 0.05, "description": "Min FVG gap size (%)", "min": 0.01, "max": 0.5},
+            {"name": "max_fires_per_day", "type": "number", "default_value": 5, "current_value": 5, "description": "Max signals per day", "min": 1, "max": 10},
+            {"name": "stop_loss_pct", "type": "number", "default_value": 40, "current_value": 40, "description": "Stop loss (% of premium)", "min": 10, "max": 80},
+            {"name": "target_pct", "type": "number", "default_value": 100, "current_value": 100, "description": "Target profit (% of premium)", "min": 20, "max": 300},
+        ],
+    }
+
+    # Load user's enabled strategies + instruments from DB
+    user_configs: dict = {}
+    try:
+        async with rls_session(tenant_id) as session:
+            result = await session.execute(
+                text("""
+                    SELECT strategy_name, enabled, params
+                    FROM user_strategy_configs
+                    WHERE tenant_id = :tenant_id
+                """),
+                {"tenant_id": tenant_id},
+            )
+            for row in result.mappings().all():
+                user_configs[row["strategy_name"]] = {
+                    "enabled": row["enabled"],
+                    "params": row["params"] if isinstance(row["params"], dict) else {},
+                }
+    except Exception as exc:
+        logger.warning("user_configs_load_failed", tenant_id=tenant_id, error=str(exc))
+
+    built_in = []
+    for sid, name, cat, tier_req, desc in built_in_defs:
+        uc = user_configs.get(sid, {})
+        uc_params = uc.get("params", {})
+        instruments = uc_params.pop("instruments", []) if isinstance(uc_params, dict) else []
+        built_in.append({
             "id": sid,
             "name": name,
             "display_name": name,
             "description": desc,
             "category": cat,
             "min_capital_tier": tier_req,
-            "enabled": False,
+            "enabled": uc.get("enabled", False),
             "is_custom": False,
-            "params": [],
-        }
-        for sid, name, cat, tier_req, desc in built_in_defs
-    ]
+            "params": technical_params.get(sid, []),
+            "instruments": instruments,
+        })
 
     return {"success": True, "data": built_in}
 
 
+class StrategyToggleBody(BaseModel):
+    enabled: bool
+    instruments: list[str] = Field(default_factory=list)
+    params: dict | None = None
+
+
 @router.patch("/{strategy_id}")
 async def toggle_strategy(request: Request, strategy_id: str):
-    """Toggle a built-in strategy's enabled state (stub)."""
-    from pydantic import BaseModel
-
-    class ToggleBody(BaseModel):
-        enabled: bool
+    """Toggle a built-in strategy's enabled state and persist to user_strategy_configs."""
+    tenant_id = request.state.tenant_id
 
     body_bytes = await request.body()
-    body = ToggleBody.model_validate_json(body_bytes)
+    body = StrategyToggleBody.model_validate_json(body_bytes)
+
+    try:
+        async with rls_session(tenant_id) as session:
+            # Check if config row exists
+            existing = await session.execute(
+                text("""
+                    SELECT strategy_name FROM user_strategy_configs
+                    WHERE tenant_id = :tenant_id AND strategy_name = :strategy_name
+                """),
+                {"tenant_id": tenant_id, "strategy_name": strategy_id},
+            )
+
+            # Build params with instruments
+            merged_params = body.params or {}
+            if body.instruments:
+                merged_params["instruments"] = body.instruments
+
+            if existing.first() is None:
+                # Insert new config
+                await session.execute(
+                    text("""
+                        INSERT INTO user_strategy_configs
+                            (tenant_id, strategy_name, enabled, params, updated_at)
+                        VALUES
+                            (:tenant_id, :strategy_name, :enabled, CAST(:params AS jsonb), NOW())
+                    """),
+                    {
+                        "tenant_id": tenant_id,
+                        "strategy_name": strategy_id,
+                        "enabled": body.enabled,
+                        "params": json.dumps(merged_params),
+                    },
+                )
+            else:
+                # Update existing
+                await session.execute(
+                    text("""
+                        UPDATE user_strategy_configs
+                        SET enabled = :enabled,
+                            params = COALESCE(params, '{}'::jsonb) || CAST(:params AS jsonb),
+                            updated_at = NOW()
+                        WHERE tenant_id = :tenant_id AND strategy_name = :strategy_name
+                    """),
+                    {
+                        "tenant_id": tenant_id,
+                        "strategy_name": strategy_id,
+                        "enabled": body.enabled,
+                        "params": json.dumps(merged_params),
+                    },
+                )
+
+        # Publish config reload event to NATS so worker picks up changes
+        nats_client = getattr(request.app.state, "nats", None)
+        if nats_client:
+            try:
+                reload_msg = {
+                    "tenant_id": tenant_id,
+                    "strategy_name": strategy_id,
+                    "enabled": body.enabled,
+                    "event": "STRATEGY_TOGGLED",
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                }
+                await nats_client.publish(
+                    f"worker.config_reload.{tenant_id}",
+                    json.dumps(reload_msg).encode(),
+                )
+            except Exception as exc:
+                logger.error("strategy_toggle_publish_failed", tenant_id=tenant_id, error=str(exc))
+
+        logger.info(
+            "strategy_toggled",
+            tenant_id=tenant_id,
+            strategy_id=strategy_id,
+            enabled=body.enabled,
+        )
+    except Exception as exc:
+        logger.error("strategy_toggle_failed", tenant_id=tenant_id, error=str(exc))
+        return _error("INTERNAL", f"Failed to toggle strategy: {exc}", 500)
 
     return {
         "success": True,
         "data": {
             "id": strategy_id,
             "enabled": body.enabled,
+            "instruments": body.instruments,
+        },
+    }
+
+
+@router.get("/{strategy_id}/config")
+async def get_strategy_config(request: Request, strategy_id: str):
+    """Get the user's config for a specific strategy."""
+    tenant_id = request.state.tenant_id
+
+    try:
+        async with rls_session(tenant_id) as session:
+            result = await session.execute(
+                text("""
+                    SELECT strategy_name, enabled, params, updated_at
+                    FROM user_strategy_configs
+                    WHERE tenant_id = :tenant_id AND strategy_name = :strategy_name
+                """),
+                {"tenant_id": tenant_id, "strategy_name": strategy_id},
+            )
+            row = result.mappings().first()
+    except Exception as exc:
+        logger.warning("strategy_config_query_failed", tenant_id=tenant_id, error=str(exc))
+        row = None
+
+    if not row:
+        return {
+            "success": True,
+            "data": {
+                "strategy_name": strategy_id,
+                "enabled": False,
+                "instruments": [],
+                "params": {},
+            },
+        }
+
+    params = row["params"] if isinstance(row["params"], dict) else {}
+    instruments = params.pop("instruments", [])
+
+    return {
+        "success": True,
+        "data": {
+            "strategy_name": row["strategy_name"],
+            "enabled": row["enabled"],
+            "instruments": instruments,
+            "params": params,
+            "updated_at": row["updated_at"].isoformat() if row["updated_at"] else None,
         },
     }
 

@@ -85,6 +85,7 @@ class WorkerPoolManager:
         # Subscribe to dynamic worker lifecycle events
         await self._nats.subscribe("worker.started.*", cb=self._on_worker_started)
         await self._nats.subscribe("worker.stopped.*", cb=self._on_worker_stopped)
+        await self._nats.subscribe("worker.config_reload.*", cb=self._on_config_reload)
 
         logger.info(
             "worker_pool_started",
@@ -277,6 +278,27 @@ class WorkerPoolManager:
         except Exception as exc:
             logger.error("worker_stopped_handler_error", error=str(exc))
 
+    async def _on_config_reload(self, msg: Msg) -> None:
+        """Handle config reload request — invalidate cache and respawn worker."""
+        try:
+            data = json.loads(msg.data.decode())
+            tenant_id = data.get("tenant_id")
+            if not tenant_id:
+                return
+
+            logger.info("config_reload_received", tenant_id=tenant_id)
+
+            # Invalidate cached config so next load re-reads from DB
+            self._config_loader.invalidate_cache(tenant_id)
+
+            # Respawn worker with fresh config (preserves open positions via DB reload)
+            if tenant_id in self.workers:
+                await self.teardown_worker(tenant_id)
+            await self.spawn_worker(tenant_id)
+            logger.info("worker_reloaded", tenant_id=tenant_id)
+        except Exception as exc:
+            logger.error("config_reload_handler_error", error=str(exc))
+
     # ------------------------------------------------------------------
     # Internal
     # ------------------------------------------------------------------
@@ -286,10 +308,15 @@ class WorkerPoolManager:
         url = f"{AUTH_SERVICE_URL}/internal/active-tenants"
         try:
             async with httpx.AsyncClient(timeout=10) as client:
-                resp = await client.get(url)
+                resp = await client.get(
+                    url,
+                    headers={"Authorization": f"Bearer {os.environ.get('AUTH_INTERNAL_TOKEN', '')}"},
+                )
                 if resp.status_code == 200:
                     data = resp.json()
-                    return data.get("tenant_ids", [])
+                    # auth_service returns {"tenants": [{"tenant_id": ...}, ...], "count": n}
+                    tenants = data.get("tenants", [])
+                    return [t["tenant_id"] for t in tenants if t.get("tenant_id")]
                 logger.warning(
                     "active_tenants_fetch_failed",
                     status=resp.status_code,
@@ -297,12 +324,12 @@ class WorkerPoolManager:
         except Exception as exc:
             logger.error("active_tenants_fetch_error", error=str(exc))
 
-        # Fallback: try loading from DB
+        # Fallback: try loading from DB (tenants table, id column)
         try:
             rows = await self._db.fetch(
-                "SELECT tenant_id FROM user_profiles WHERE is_active = true"
+                "SELECT id FROM tenants WHERE is_active = true"
             )
-            return [row["tenant_id"] for row in rows]
+            return [str(row["id"]) for row in rows]
         except Exception as exc:
             logger.error("active_tenants_db_fallback_failed", error=str(exc))
             return []

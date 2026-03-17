@@ -336,6 +336,20 @@ $$ LANGUAGE plpgsql;
 CREATE TRIGGER no_audit_update BEFORE UPDATE OR DELETE ON audit_events
     FOR EACH ROW EXECUTE FUNCTION prevent_audit_modification();
 
+-- Per-tenant watchlists
+CREATE TABLE watchlists (
+    id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id  UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+    name       TEXT NOT NULL DEFAULT 'My Watchlist',
+    symbols    JSONB NOT NULL DEFAULT '[]',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+ALTER TABLE watchlists ENABLE ROW LEVEL SECURITY;
+CREATE POLICY tenant_isolation ON watchlists
+    USING (tenant_id = current_setting('app.current_tenant_id')::UUID);
+CREATE INDEX ON watchlists (tenant_id, created_at);
+
 -- Custom AI strategies (per tenant)
 CREATE TABLE custom_strategies (
     id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),

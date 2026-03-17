@@ -1,6 +1,6 @@
 export type CapitalTier = "STARTER" | "GROWTH" | "PRO" | "INSTITUTIONAL";
 
-export type StrategyCategory = "BUYING" | "SELLING" | "HYBRID";
+export type StrategyCategory = "BUYING" | "SELLING" | "HYBRID" | "TECHNICAL";
 
 export interface StrategyParam {
   name: string;
@@ -22,6 +22,7 @@ export interface Strategy {
   min_capital_tier: CapitalTier;
   enabled: boolean;
   params: StrategyParam[];
+  instruments?: string[];
   win_rate?: number;
   avg_return?: number;
   total_trades?: number;

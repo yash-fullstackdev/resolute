@@ -65,11 +65,20 @@ class AsyncDB:
         if self._pool is None:
             raise RuntimeError("Database pool not initialised")
 
+        # Validate tenant_id is a UUID to prevent injection
+        import uuid as _uuid
+        try:
+            _uuid.UUID(str(tenant_id))
+        except ValueError:
+            raise ValueError(f"Invalid tenant_id format: {tenant_id}")
+
         async with self._pool.acquire() as conn:
-            await conn.execute(
-                "SET LOCAL app.current_tenant = $1", tenant_id
-            )
-            yield conn
+            async with conn.transaction():
+                # SET LOCAL requires a transaction; match RLS policy setting name
+                await conn.execute(
+                    f"SET LOCAL app.current_tenant_id = '{tenant_id}'"
+                )
+                yield conn
 
     # ------------------------------------------------------------------
     # Raw pool access (for non-tenant-scoped queries)

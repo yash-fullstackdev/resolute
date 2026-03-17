@@ -199,6 +199,11 @@ class UserWorker:
             if chain_segment not in strategy.allowed_segments:
                 continue
 
+            # Instrument filter — only run if user subscribed this underlying
+            strategy_instruments = self.config.get_strategy_instruments(strategy.name)
+            if strategy_instruments and chain.underlying not in strategy_instruments:
+                continue
+
             strategy_config = self.config.get_strategy_config(strategy.name)
 
             try:
@@ -761,6 +766,11 @@ class _ChainSnapshot:
         self.strikes = []
         for s in data.get("strikes", []):
             self.strikes.append(_StrikeData(s))
+
+        # Candle data injected by signal_engine CandleAggregator
+        # Format: {open: [...], high: [...], low: [...], close: [...], volume: [...], timestamp: [...]}
+        self.candles_1m: dict = data.get("candles_1m", {})
+        self.candles_5m: dict = data.get("candles_5m", {})
 
 
 class _StrikeData:

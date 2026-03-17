@@ -45,91 +45,158 @@ def _error(code: str, message: str, status: int, details: dict | None = None) ->
 
 @router.get("/score")
 async def get_discipline_score(request: Request):
-    """Get the authenticated user's rolling discipline score (0–100)."""
+    """Get the authenticated user's rolling discipline score (0–100).
+
+    Computes from trade_journal if available, otherwise returns default perfect score.
+    """
     tenant_id = request.state.tenant_id
 
-    async with rls_session(tenant_id) as session:
-        result = await session.execute(
-            text("""
-                SELECT score, components, trend, last_updated
-                FROM discipline_scores
-                WHERE tenant_id = :tenant_id
-                ORDER BY last_updated DESC
-                LIMIT 1
-            """),
-            {"tenant_id": tenant_id},
-        )
-        row = result.mappings().first()
+    default_response = {
+        "success": True,
+        "data": {
+            "score": 100.0,
+            "components": {
+                "plan_adherence": 100.0,
+                "stop_loss_respected": 100.0,
+                "time_stop_respected": 100.0,
+                "override_penalty": 0.0,
+            },
+            "trend": "STABLE",
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        },
+    }
 
-    if not row:
+    try:
+        async with rls_session(tenant_id) as session:
+            # Use trade_journal to compute rolling 30-day discipline score
+            result = await session.execute(
+                text("""
+                    SELECT
+                        COALESCE(AVG(discipline_score), 100.0) AS score,
+                        COUNT(*) AS total_trades,
+                        COUNT(*) FILTER (WHERE discipline_score >= 75) AS disciplined,
+                        COUNT(*) FILTER (WHERE discipline_score < 50) AS undisciplined,
+                        MAX(entry_time) AS last_trade
+                    FROM trade_journal
+                    WHERE tenant_id = :tenant_id
+                      AND trade_date >= CURRENT_DATE - INTERVAL '30 days'
+                """),
+                {"tenant_id": tenant_id},
+            )
+            row = result.mappings().first()
+
+        if not row or row["total_trades"] == 0:
+            return default_response
+
+        total = row["total_trades"]
+        score = float(row["score"])
+        disciplined = row["disciplined"]
+        undisciplined = row["undisciplined"]
+
+        # Determine trend from recent vs older scores
+        trend = "STABLE"
+        if total >= 5:
+            if disciplined / total >= 0.7:
+                trend = "IMPROVING"
+            elif undisciplined / total >= 0.4:
+                trend = "DECLINING"
+
+        logger.info("discipline_score_retrieved", tenant_id=tenant_id, score=score)
+
         return {
             "success": True,
             "data": {
-                "score": 100.0,
-                "components": {},
-                "trend": "STABLE",
-                "updated_at": datetime.now(timezone.utc).isoformat(),
+                "score": round(score, 1),
+                "components": {
+                    "total_trades": total,
+                    "disciplined_trades": disciplined,
+                    "undisciplined_trades": undisciplined,
+                },
+                "trend": trend,
+                "updated_at": row["last_trade"].isoformat() if row["last_trade"] else datetime.now(timezone.utc).isoformat(),
             },
         }
-
-    logger.info("discipline_score_retrieved", tenant_id=tenant_id, score=row["score"])
-
-    return {
-        "success": True,
-        "data": {
-            "score": float(row["score"]),
-            "components": row["components"] if isinstance(row["components"], dict) else {},
-            "trend": row["trend"],
-            "updated_at": row["last_updated"].isoformat() if row["last_updated"] else None,
-        },
-    }
+    except Exception as exc:
+        logger.warning("discipline_score_query_failed", tenant_id=tenant_id, error=str(exc))
+        return default_response
 
 
 @router.get("/circuit-breaker")
 async def get_circuit_breaker(request: Request):
-    """Get the authenticated user's circuit breaker state."""
+    """Get the authenticated user's circuit breaker state.
+
+    Derives state from circuit_breaker_events log and trading_plans limits.
+    """
     tenant_id = request.state.tenant_id
 
-    async with rls_session(tenant_id) as session:
-        result = await session.execute(
-            text("""
-                SELECT is_halted, halted_at, halt_reason, reset_at,
-                       daily_loss_inr, daily_loss_limit_inr
-                FROM circuit_breaker_state
-                WHERE tenant_id = :tenant_id
-            """),
-            {"tenant_id": tenant_id},
-        )
-        row = result.mappings().first()
-
-    if not row:
-        return {
-            "success": True,
-            "data": {
-                "status": "ACTIVE",
-                "reason": None,
-                "halted_at": None,
-                "resume_at": None,
-                "daily_loss": 0.0,
-                "daily_loss_limit": 0.0,
-                "consecutive_losses": 0,
-                "max_consecutive_losses": 5,
-            },
-        }
-
-    return {
+    default_response = {
         "success": True,
         "data": {
-            "status": "HALTED" if row["is_halted"] else "ACTIVE",
-            "reason": row["halt_reason"],
-            "halted_at": row["halted_at"].isoformat() if row["halted_at"] else None,
-            "resume_at": row["reset_at"].isoformat() if row["reset_at"] else None,
-            "daily_loss": float(row["daily_loss_inr"]),
-            "daily_loss_limit": float(row["daily_loss_limit_inr"]),
+            "status": "ACTIVE",
+            "reason": None,
+            "halted_at": None,
+            "resume_at": None,
+            "daily_loss": 0.0,
+            "daily_loss_limit": 5000.0,
             "consecutive_losses": 0,
             "max_consecutive_losses": 5,
         },
     }
+
+    try:
+        async with rls_session(tenant_id) as session:
+            # Check most recent circuit breaker event today
+            event_result = await session.execute(
+                text("""
+                    SELECT event_type, trigger_reason, pnl_at_event_inr,
+                           trades_at_event, event_time
+                    FROM circuit_breaker_events
+                    WHERE tenant_id = :tenant_id
+                      AND event_time >= CURRENT_DATE
+                    ORDER BY event_time DESC
+                    LIMIT 1
+                """),
+                {"tenant_id": tenant_id},
+            )
+            event_row = event_result.mappings().first()
+
+            # Get daily loss limit from trading plan
+            plan_result = await session.execute(
+                text("""
+                    SELECT daily_loss_limit_inr
+                    FROM trading_plans
+                    WHERE tenant_id = :tenant_id
+                    ORDER BY created_at DESC
+                    LIMIT 1
+                """),
+                {"tenant_id": tenant_id},
+            )
+            plan_row = plan_result.mappings().first()
+
+        daily_loss_limit = float(plan_row["daily_loss_limit_inr"]) if plan_row else 5000.0
+
+        if not event_row:
+            default_response["data"]["daily_loss_limit"] = daily_loss_limit
+            return default_response
+
+        is_halted = event_row["event_type"] in ("HALT", "MAX_LOSS_HIT", "MAX_TRADES_HIT", "PROFIT_TARGET_HIT")
+
+        return {
+            "success": True,
+            "data": {
+                "status": "HALTED" if is_halted else "ACTIVE",
+                "reason": event_row["trigger_reason"],
+                "halted_at": event_row["event_time"].isoformat() if is_halted and event_row["event_time"] else None,
+                "resume_at": None,
+                "daily_loss": abs(float(event_row["pnl_at_event_inr"] or 0)),
+                "daily_loss_limit": daily_loss_limit,
+                "consecutive_losses": 0,
+                "max_consecutive_losses": 5,
+            },
+        }
+    except Exception as exc:
+        logger.warning("circuit_breaker_query_failed", tenant_id=tenant_id, error=str(exc))
+        return default_response
 
 
 @router.get("/overrides")

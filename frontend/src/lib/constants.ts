@@ -15,6 +15,13 @@ export const STRATEGY_NAMES: Record<string, string> = {
   bear_put_spread: "Bear Put Spread",
   pcr_contrarian: "PCR Contrarian",
   event_directional: "Event Directional",
+  ttm_squeeze: "TTM Squeeze",
+  supertrend_strategy: "Supertrend",
+  vwap_supertrend: "VWAP + Supertrend Combo",
+  ema_breakdown: "EMA Breakdown",
+  rsi_vwap_scalp: "RSI VWAP Scalp",
+  ema33_ob: "33 EMA Option Buying",
+  smc_order_block: "SMC Order Block",
 };
 
 export const TIER_NAMES: Record<string, string> = {

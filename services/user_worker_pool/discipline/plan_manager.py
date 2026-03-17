@@ -106,11 +106,11 @@ class PlanManager:
             await self._db.execute(
                 """
                 INSERT INTO trading_plans
-                    (user_id, plan_date, enabled_strategies, active_underlyings,
+                    (tenant_id, plan_date, enabled_strategies, active_underlyings,
                      max_trades_per_day, daily_loss_limit_inr, daily_profit_target_inr,
                      notes, locked_at, plan_hash, status)
                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-                ON CONFLICT (user_id, plan_date) DO UPDATE SET
+                ON CONFLICT (tenant_id, plan_date) DO UPDATE SET
                     enabled_strategies = EXCLUDED.enabled_strategies,
                     active_underlyings = EXCLUDED.active_underlyings,
                     locked_at = EXCLUDED.locked_at,
@@ -229,11 +229,11 @@ class PlanManager:
         try:
             row = await self._db.fetchrow(
                 """
-                SELECT user_id, plan_date, enabled_strategies, active_underlyings,
+                SELECT tenant_id, plan_date, enabled_strategies, active_underlyings,
                        max_trades_per_day, daily_loss_limit_inr, daily_profit_target_inr,
                        notes, locked_at, plan_hash, status
                 FROM trading_plans
-                WHERE user_id = $1 AND plan_date = CURRENT_DATE AND status = 'LOCKED'
+                WHERE tenant_id = $1 AND plan_date = CURRENT_DATE AND status = 'LOCKED'
                 """,
                 user_id,
                 tenant_id=user_id,
@@ -242,7 +242,7 @@ class PlanManager:
                 return None
 
             locked = LockedPlan(
-                user_id=row["user_id"],
+                user_id=str(row["tenant_id"]),
                 date=row["plan_date"],
                 enabled_strategies=list(row["enabled_strategies"]),
                 active_underlyings=list(row["active_underlyings"]),

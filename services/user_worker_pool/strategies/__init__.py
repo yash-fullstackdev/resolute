@@ -35,6 +35,15 @@ from .iron_condor import IronCondorStrategy
 from .jade_lizard import JadeLizardStrategy
 from .covered_call import CoveredCallStrategy
 
+# -- TECHNICAL strategies (candle-based, STARTER tier) --
+from .ttm_squeeze import TTMSqueezeStrategy
+from .supertrend_strategy import SupertrendStrategy
+from .vwap_supertrend import VWAPSupertrendStrategy
+from .ema_breakdown import EMABreakdownStrategy
+from .rsi_vwap_scalp import RSIVWAPScalpStrategy
+from .ema33_ob import EMA33OBStrategy
+from .smc_order_block import SMCOrderBlockStrategy
+
 STRATEGY_REGISTRY: dict[str, type[BaseStrategy]] = {
     # BUYING
     "long_call": LongCallStrategy,
@@ -59,6 +68,14 @@ STRATEGY_REGISTRY: dict[str, type[BaseStrategy]] = {
     "iron_condor": IronCondorStrategy,
     "jade_lizard": JadeLizardStrategy,
     "covered_call": CoveredCallStrategy,
+    # TECHNICAL (candle-based, all tiers)
+    "ttm_squeeze": TTMSqueezeStrategy,
+    "supertrend_strategy": SupertrendStrategy,
+    "vwap_supertrend": VWAPSupertrendStrategy,
+    "ema_breakdown": EMABreakdownStrategy,
+    "rsi_vwap_scalp": RSIVWAPScalpStrategy,
+    "ema33_ob": EMA33OBStrategy,
+    "smc_order_block": SMCOrderBlockStrategy,
 }
 
 
