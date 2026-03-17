@@ -47,7 +47,7 @@ async def get_chain(request: Request, underlying: str):
 
     # Determine segment from underlying
     segment = "mcx" if underlying.upper() in ("GOLD", "SILVER", "CRUDEOIL", "NATURALGAS") else "nse"
-    subject = f"chain.{segment}.{underlying.upper()}"
+    subject = f"chain.request.{underlying.upper()}"
 
     try:
         response = await nats_client.request(
