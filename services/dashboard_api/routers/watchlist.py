@@ -37,6 +37,52 @@ ALLOWED_SYMBOLS = {
     "SUNPHARMA", "ADANIENT", "HINDALCO",
 }
 
+# Well-known index security IDs (not in the equity scrip master).
+INDEX_SECURITY_IDS = {"NIFTY": 13, "BANKNIFTY": 25, "FINNIFTY": 27, "MIDCPNIFTY": 442}
+
+NATS_FEED_SUBSCRIBE_SUBJECT = "feed.subscribe"
+
+
+def _get_exchange(symbol: str) -> str:
+    """Return Dhan exchange segment for a symbol."""
+    indices = {"NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY"}
+    return "IDX_I" if symbol in indices else "NSE_EQ"
+
+
+async def _publish_feed_subscriptions(request: Request, symbols: list[str]) -> None:
+    """Publish NATS messages so the feed gateway subscribes to new symbols."""
+    nats_client = getattr(request.app.state, "nats", None)
+    if nats_client is None or not nats_client.is_connected:
+        return
+
+    # Build a lookup from the scrip master for equity security IDs.
+    equities = await _get_nse_equities()
+    equity_map = {e["symbol"]: e["security_id"] for e in equities if e.get("security_id")}
+
+    for symbol in symbols:
+        exchange = _get_exchange(symbol)
+
+        # Resolve security_id: indices from hardcoded map, equities from scrip master.
+        if symbol in INDEX_SECURITY_IDS:
+            security_id = INDEX_SECURITY_IDS[symbol]
+        elif symbol in equity_map:
+            security_id = equity_map[symbol]
+        else:
+            logger.debug("feed_subscribe_skip", symbol=symbol, reason="security_id not found")
+            continue
+
+        payload = json.dumps({
+            "symbol": symbol,
+            "security_id": security_id,
+            "exchange": exchange,
+        }).encode()
+
+        try:
+            await nats_client.publish(NATS_FEED_SUBSCRIBE_SUBJECT, payload)
+            logger.debug("feed_subscribe_published", symbol=symbol, security_id=security_id, exchange=exchange)
+        except Exception as exc:
+            logger.error("feed_subscribe_publish_failed", symbol=symbol, error=str(exc))
+
 # ── Scrip master cache ──────────────────────────────────────────────────────
 
 DHAN_SCRIP_MASTER_URL = "https://images.dhan.co/api-data/api-scrip-master.csv"
@@ -189,6 +235,10 @@ async def create_watchlist(request: Request, body: WatchlistInput):
         )
 
     logger.info("watchlist_created", tenant_id=tenant_id, watchlist_id=watchlist_id)
+
+    # Notify feed gateway to subscribe to the new symbols.
+    await _publish_feed_subscriptions(request, body.symbols)
+
     return {
         "success": True,
         "data": {
@@ -228,6 +278,10 @@ async def update_watchlist(request: Request, watchlist_id: str, body: WatchlistI
         )
 
     logger.info("watchlist_updated", tenant_id=tenant_id, watchlist_id=watchlist_id)
+
+    # Notify feed gateway to subscribe to the new symbols.
+    await _publish_feed_subscriptions(request, body.symbols)
+
     return {
         "success": True,
         "data": {"id": watchlist_id, "name": body.name, "symbols": body.symbols},

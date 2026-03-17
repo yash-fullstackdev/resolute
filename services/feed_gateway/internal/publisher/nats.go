@@ -171,6 +171,13 @@ func (np *NATSPublisher) GetLastTickTime(symbol string) (time.Time, bool) {
 	return t, ok
 }
 
+// Conn returns the underlying NATS connection for subscribing to subjects.
+func (np *NATSPublisher) Conn() *nats.Conn {
+	np.mu.RLock()
+	defer np.mu.RUnlock()
+	return np.conn
+}
+
 // Close flushes pending messages and closes the NATS connection.
 func (np *NATSPublisher) Close() error {
 	if np.conn != nil {

@@ -370,6 +370,59 @@ func (p *DhanWSFeedProvider) sendSubscription(conn *websocket.Conn, requestCode 
 	return conn.WriteMessage(websocket.BinaryMessage, packet)
 }
 
+// SubscribeDynamic adds a single instrument to the live subscription set.
+// If a WebSocket connection is active, it sends a subscription packet immediately.
+// Thread-safe — can be called from any goroutine (e.g. a NATS handler).
+func (p *DhanWSFeedProvider) SubscribeDynamic(symbol string, securityID int, exchange string) {
+	exchByte, ok := dhanExchangeByte[exchange]
+	if !ok {
+		log.Warn().Str("symbol", symbol).Str("exchange", exchange).Msg("SubscribeDynamic: unknown exchange segment, ignoring")
+		return
+	}
+
+	key := fmt.Sprintf("%d:%d", exchByte, securityID)
+
+	p.mu.Lock()
+
+	// Check if already subscribed.
+	if _, exists := p.secIDToSymbol[key]; exists {
+		p.mu.Unlock()
+		log.Debug().Str("symbol", symbol).Msg("SubscribeDynamic: already subscribed, skipping")
+		return
+	}
+
+	// Register the instrument in lookup maps.
+	sym := SymbolConfig{
+		Symbol:  symbol,
+		Segment: SegmentNSEIndex, // default; caller can refine
+	}
+	p.secIDToSymbol[key] = sym
+	p.dhanSymbols = append(p.dhanSymbols, sym)
+
+	// Also register in the global security ID table so reconnections pick it up.
+	dhanSecurityIDs[symbol] = dhanInstrument{SecurityID: securityID, Exchange: exchange}
+
+	conn := p.conn
+	p.mu.Unlock()
+
+	log.Info().Str("symbol", symbol).Int("security_id", securityID).Str("exchange", exchange).Msg("SubscribeDynamic: instrument registered")
+
+	// If there is a live connection, send a single-instrument subscription packet.
+	if conn != nil {
+		packet := make([]byte, 8) // 1 byte request code + 7 bytes instrument
+		packet[0] = dhanSubscribeCode
+		packet[1] = exchByte
+		binary.BigEndian.PutUint32(packet[2:6], uint32(securityID))
+		binary.BigEndian.PutUint16(packet[6:8], dhanSubTypeQuote)
+
+		if err := conn.WriteMessage(websocket.BinaryMessage, packet); err != nil {
+			log.Error().Err(err).Str("symbol", symbol).Msg("SubscribeDynamic: failed to send subscription packet")
+		} else {
+			log.Info().Str("symbol", symbol).Msg("SubscribeDynamic: subscription packet sent on live connection")
+		}
+	}
+}
+
 // handleMessage parses a binary response packet from the Dhan WebSocket feed.
 func (p *DhanWSFeedProvider) handleMessage(data []byte) {
 	if len(data) < dhanHeaderSize {

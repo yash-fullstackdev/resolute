@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/signal"
@@ -10,6 +11,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/nats-io/nats.go"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 	"gopkg.in/yaml.v3"
@@ -126,6 +128,36 @@ func main() {
 		log.Error().Err(err).Msg("feed provider error")
 		healthStatus.IncrementReconnectCount()
 	})
+
+	// Subscribe to NATS subject for dynamic symbol subscriptions.
+	// When a user adds a symbol to their watchlist, the dashboard_api publishes
+	// a message here so the feed gateway can subscribe to it on the Dhan WebSocket.
+	if dhanProvider, ok := provider.(*feed.DhanWSFeedProvider); ok {
+		type feedSubscribeMsg struct {
+			Symbol     string `json:"symbol"`
+			SecurityID int    `json:"security_id"`
+			Exchange   string `json:"exchange"`
+		}
+
+		_, err := pub.Conn().Subscribe("feed.subscribe", func(msg *nats.Msg) {
+			var req feedSubscribeMsg
+			if err := json.Unmarshal(msg.Data, &req); err != nil {
+				log.Error().Err(err).Msg("feed.subscribe: invalid JSON payload")
+				return
+			}
+			if req.Symbol == "" || req.SecurityID == 0 || req.Exchange == "" {
+				log.Warn().Str("raw", string(msg.Data)).Msg("feed.subscribe: missing required fields")
+				return
+			}
+			log.Info().Str("symbol", req.Symbol).Int("security_id", req.SecurityID).Str("exchange", req.Exchange).Msg("feed.subscribe: dynamic subscription request received")
+			dhanProvider.SubscribeDynamic(req.Symbol, req.SecurityID, req.Exchange)
+		})
+		if err != nil {
+			log.Error().Err(err).Msg("failed to subscribe to feed.subscribe NATS subject")
+		} else {
+			log.Info().Msg("listening for dynamic feed subscriptions on feed.subscribe")
+		}
+	}
 
 	// Market hours guard: wait until market is open before connecting.
 	var wg sync.WaitGroup
