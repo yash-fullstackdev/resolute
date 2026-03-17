@@ -8,7 +8,7 @@ import { formatINR } from "@/lib/formatters";
 import { useLiveDataStore } from "@/stores/liveDataStore";
 import { useWebSocket } from "@/hooks/useWebSocket";
 import type { ApiResponse } from "@/types/api";
-import { Plus, Trash2, X, Eye } from "lucide-react";
+import { Plus, Trash2, X, Eye, ArrowLeft, TrendingUp, TrendingDown, Minus } from "lucide-react";
 
 interface Watchlist {
   id: string;
@@ -23,6 +23,7 @@ export default function WatchlistPage() {
   const ticks = useLiveDataStore((s) => s.ticks);
   const queryClient = useQueryClient();
   const [newName, setNewName] = useState("");
+  const [selectedWatchlist, setSelectedWatchlist] = useState<Watchlist | null>(null);
 
   const { data: watchlists, isLoading } = useQuery<Watchlist[]>({
     queryKey: ["watchlists"],
@@ -31,6 +32,11 @@ export default function WatchlistPage() {
       return res.data.data;
     },
   });
+
+  // Keep selectedWatchlist in sync with fetched data
+  const activeWatchlist = selectedWatchlist
+    ? watchlists?.find((wl) => wl.id === selectedWatchlist.id) ?? selectedWatchlist
+    : null;
 
   const createMutation = useMutation({
     mutationFn: async (name: string) => {
@@ -57,6 +63,7 @@ export default function WatchlistPage() {
     },
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ["watchlists"] });
+      setSelectedWatchlist(null);
     },
   });
 
@@ -86,6 +93,131 @@ export default function WatchlistPage() {
     );
   }
 
+  // ── Detail View ──
+  if (activeWatchlist) {
+    return (
+      <div className="space-y-6">
+        <div className="flex items-center gap-3">
+          <button
+            onClick={() => setSelectedWatchlist(null)}
+            className="rounded-lg p-2 text-slate-400 transition-colors hover:bg-surface-light hover:text-white"
+          >
+            <ArrowLeft className="h-5 w-5" />
+          </button>
+          <h1 className="text-2xl font-bold text-white">{activeWatchlist.name}</h1>
+          <span className="rounded-full bg-surface-light px-2.5 py-0.5 text-xs text-slate-400">
+            {activeWatchlist.symbols.length} symbols
+          </span>
+        </div>
+
+        {/* Live Market Table */}
+        {activeWatchlist.symbols.length > 0 ? (
+          <div className="overflow-hidden rounded-xl border border-surface-border">
+            <table className="w-full">
+              <thead>
+                <tr className="border-b border-surface-border bg-surface-dark">
+                  <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-slate-400">Symbol</th>
+                  <th className="px-4 py-3 text-right text-xs font-medium uppercase tracking-wider text-slate-400">LTP</th>
+                  <th className="px-4 py-3 text-right text-xs font-medium uppercase tracking-wider text-slate-400">Change %</th>
+                  <th className="px-4 py-3 text-right text-xs font-medium uppercase tracking-wider text-slate-400">Trend</th>
+                  <th className="px-4 py-3 text-center text-xs font-medium uppercase tracking-wider text-slate-400">Action</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-surface-border">
+                {activeWatchlist.symbols.map((sym) => {
+                  const tick = ticks[sym];
+                  const price = tick?.last_price;
+                  const changePct = tick?.change_pct ?? 0;
+                  const isUp = changePct > 0;
+                  const isDown = changePct < 0;
+
+                  return (
+                    <tr key={sym} className="bg-surface transition-colors hover:bg-surface-light">
+                      <td className="px-4 py-4">
+                        <span className="text-sm font-semibold text-white">{sym}</span>
+                      </td>
+                      <td className="px-4 py-4 text-right">
+                        {price != null ? (
+                          <span className="text-sm font-bold tabular-nums text-white">
+                            {formatINR(price)}
+                          </span>
+                        ) : (
+                          <span className="text-sm text-slate-500">--</span>
+                        )}
+                      </td>
+                      <td className="px-4 py-4 text-right">
+                        {tick ? (
+                          <span
+                            className={`inline-flex items-center rounded-md px-2 py-0.5 text-xs font-bold tabular-nums ${
+                              isUp
+                                ? "bg-profit/10 text-profit"
+                                : isDown
+                                  ? "bg-loss/10 text-loss"
+                                  : "bg-slate-700 text-slate-400"
+                            }`}
+                          >
+                            {isUp ? "+" : ""}{changePct.toFixed(2)}%
+                          </span>
+                        ) : (
+                          <span className="text-sm text-slate-500">--</span>
+                        )}
+                      </td>
+                      <td className="px-4 py-4 text-right">
+                        {tick ? (
+                          isUp ? (
+                            <TrendingUp className="ml-auto h-4 w-4 text-profit" />
+                          ) : isDown ? (
+                            <TrendingDown className="ml-auto h-4 w-4 text-loss" />
+                          ) : (
+                            <Minus className="ml-auto h-4 w-4 text-slate-500" />
+                          )
+                        ) : null}
+                      </td>
+                      <td className="px-4 py-4 text-center">
+                        <button
+                          onClick={() => removeSymbol(activeWatchlist, sym)}
+                          className="rounded-md p-1 text-slate-500 transition-colors hover:bg-loss/10 hover:text-loss"
+                          title="Remove from watchlist"
+                        >
+                          <X className="h-4 w-4" />
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <div className="flex h-32 items-center justify-center rounded-xl border border-dashed border-surface-border">
+            <p className="text-sm text-slate-500">No symbols in this watchlist</p>
+          </div>
+        )}
+
+        {/* Add symbols section */}
+        <div className="rounded-xl border border-surface-border bg-surface p-5">
+          <p className="mb-3 text-sm font-medium text-slate-300">Add symbols</p>
+          <div className="flex flex-wrap gap-2">
+            {UNDERLYINGS.filter((s) => !activeWatchlist.symbols.includes(s)).map((sym) => (
+              <button
+                key={sym}
+                onClick={() => addSymbol(activeWatchlist, sym)}
+                className="flex items-center gap-1 rounded-lg border border-surface-border px-3 py-1.5 text-sm text-slate-400 transition-colors hover:border-accent/50 hover:bg-accent/10 hover:text-white"
+              >
+                <Plus className="h-3 w-3" />
+                {sym}
+              </button>
+            ))}
+            {UNDERLYINGS.filter((s) => !activeWatchlist.symbols.includes(s)).length === 0 && (
+              <span className="text-sm text-slate-500">All available symbols added</span>
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // ── List View ──
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
@@ -126,71 +258,67 @@ export default function WatchlistPage() {
           </button>
         </div>
       ) : (
-        <div className="space-y-4">
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
           {watchlists.map((wl) => (
-            <div key={wl.id} className="rounded-xl border border-surface-border bg-surface p-5">
+            <div
+              key={wl.id}
+              className="group cursor-pointer rounded-xl border border-surface-border bg-surface p-5 transition-all hover:border-accent/30 hover:bg-surface-light"
+              onClick={() => setSelectedWatchlist(wl)}
+            >
               <div className="flex items-center justify-between">
                 <h2 className="text-lg font-semibold text-white">{wl.name}</h2>
                 <button
-                  onClick={() => deleteMutation.mutate(wl.id)}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    deleteMutation.mutate(wl.id);
+                  }}
                   disabled={deleteMutation.isPending}
-                  className="rounded-md p-1.5 text-slate-400 transition-colors hover:bg-loss/10 hover:text-loss"
+                  className="rounded-md p-1.5 text-slate-500 opacity-0 transition-all hover:bg-loss/10 hover:text-loss group-hover:opacity-100"
                   title="Delete watchlist"
                 >
                   <Trash2 className="h-4 w-4" />
                 </button>
               </div>
 
-              {/* Current symbols */}
+              <p className="mt-1 text-xs text-slate-500">{wl.symbols.length} symbols</p>
+
               {wl.symbols.length > 0 ? (
-                <div className="mt-3 flex flex-wrap gap-2">
-                  {wl.symbols.map((sym) => {
+                <div className="mt-3 space-y-1.5">
+                  {wl.symbols.slice(0, 5).map((sym) => {
                     const tick = ticks[sym];
                     return (
-                      <span
-                        key={sym}
-                        className="flex items-center gap-1.5 rounded-full border border-accent/30 bg-accent/10 px-3 py-1 text-sm font-medium text-accent-light"
-                      >
-                        {sym}
-                        {tick && (
-                          <span className="ml-1 flex items-center gap-1 text-xs">
-                            <span className="text-white">{formatINR(tick.last_price)}</span>
-                            <span className={tick.change_pct >= 0 ? "text-profit" : "text-loss"}>
+                      <div key={sym} className="flex items-center justify-between">
+                        <span className="text-sm text-slate-300">{sym}</span>
+                        {tick ? (
+                          <div className="flex items-center gap-2">
+                            <span className="text-sm font-medium tabular-nums text-white">
+                              {formatINR(tick.last_price)}
+                            </span>
+                            <span
+                              className={`text-xs font-medium tabular-nums ${
+                                tick.change_pct >= 0 ? "text-profit" : "text-loss"
+                              }`}
+                            >
                               {tick.change_pct >= 0 ? "+" : ""}{tick.change_pct.toFixed(2)}%
                             </span>
-                          </span>
+                          </div>
+                        ) : (
+                          <span className="text-xs text-slate-600">--</span>
                         )}
-                        <button
-                          onClick={() => removeSymbol(wl, sym)}
-                          className="rounded-full p-0.5 transition-colors hover:bg-loss/20 hover:text-loss"
-                        >
-                          <X className="h-3 w-3" />
-                        </button>
-                      </span>
+                      </div>
                     );
                   })}
-                </div>
-              ) : (
-                <p className="mt-3 text-sm text-slate-500">No symbols added yet</p>
-              )}
-
-              {/* Add symbols */}
-              <div className="mt-4 border-t border-surface-border pt-3">
-                <p className="mb-2 text-xs text-slate-500">Add symbols:</p>
-                <div className="flex flex-wrap gap-1.5">
-                  {UNDERLYINGS.filter((s) => !wl.symbols.includes(s)).map((sym) => (
-                    <button
-                      key={sym}
-                      onClick={() => addSymbol(wl, sym)}
-                      className="rounded-md border border-surface-border px-2.5 py-1 text-xs text-slate-400 transition-colors hover:border-accent/50 hover:bg-accent/10 hover:text-white"
-                    >
-                      + {sym}
-                    </button>
-                  ))}
-                  {UNDERLYINGS.filter((s) => !wl.symbols.includes(s)).length === 0 && (
-                    <span className="text-xs text-slate-500">All symbols added</span>
+                  {wl.symbols.length > 5 && (
+                    <p className="text-xs text-slate-500">+{wl.symbols.length - 5} more</p>
                   )}
                 </div>
+              ) : (
+                <p className="mt-3 text-sm text-slate-500">Empty watchlist</p>
+              )}
+
+              <div className="mt-3 flex items-center gap-1 text-xs text-accent opacity-0 transition-opacity group-hover:opacity-100">
+                <Eye className="h-3 w-3" />
+                View details
               </div>
             </div>
           ))}
