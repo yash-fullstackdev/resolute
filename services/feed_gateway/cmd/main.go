@@ -230,9 +230,12 @@ func loadConfig() (*Config, error) {
 			"NIFTY",
 			"BANKNIFTY",
 			"FINNIFTY",
-			"MCX:GOLD",
-			"MCX:CRUDEOIL",
-			"MCX:SILVER",
+			"NSE:RELIANCE",
+			"NSE:HDFCBANK",
+			"NSE:INFY",
+			"NSE:TCS",
+			"NSE:ICICIBANK",
+			"NSE:SBIN",
 		}
 	}
 

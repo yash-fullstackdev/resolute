@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -35,7 +36,8 @@ var dhanSecurityIDs = map[string]dhanInstrument{
 }
 
 const (
-	dhanLTPEndpoint = "https://api.dhan.co/v2/marketfeed/ltp"
+	dhanLTPEndpoint  = "https://api.dhan.co/v2/marketfeed/ltp"
+	dhanOHLCEndpoint = "https://api.dhan.co/v2/marketfeed/ohlc"
 	dhanPollInterval = 2 * time.Second
 	dhanHTTPTimeout  = 5 * time.Second
 )
@@ -62,6 +64,8 @@ type DhanFeedProvider struct {
 	secIDToSymbol map[string]SymbolConfig
 	// lastPrices tracks the most recent price per symbol for OHLC approximation.
 	lastPrices map[string]float64
+	// prevClose stores the previous day's close price per symbol (fetched once on startup).
+	prevClose map[string]float64
 }
 
 // NewDhanFeedProvider creates a Dhan feed provider that polls the LTP REST API.
@@ -73,6 +77,7 @@ func NewDhanFeedProvider(accessToken, clientID string, symbols []SymbolConfig) *
 		httpClient:    &http.Client{Timeout: dhanHTTPTimeout},
 		secIDToSymbol: make(map[string]SymbolConfig),
 		lastPrices:    make(map[string]float64),
+		prevClose:     make(map[string]float64),
 	}
 
 	// Build the request body grouped by exchange segment.
@@ -121,6 +126,9 @@ func (p *DhanFeedProvider) Connect(ctx context.Context) error {
 	if p.requestBody == nil {
 		return fmt.Errorf("dhan request body not built")
 	}
+
+	// Fetch previous close prices in background (non-blocking).
+	go p.fetchPrevClose(ctx)
 
 	childCtx, cancel := context.WithCancel(ctx)
 	p.cancel = cancel
@@ -186,6 +194,91 @@ func (p *DhanFeedProvider) pollLoop(ctx context.Context) {
 			p.poll(ctx)
 		}
 	}
+}
+
+// cleanSymbolName strips exchange prefixes like "NSE:" for the canonical tick symbol.
+func cleanSymbolName(sym string) string {
+	if strings.HasPrefix(sym, "NSE:") {
+		return strings.TrimPrefix(sym, "NSE:")
+	}
+	if strings.HasPrefix(sym, "MCX:") {
+		return strings.TrimPrefix(sym, "MCX:")
+	}
+	return sym
+}
+
+// fetchPrevClose calls the Dhan OHLC endpoint once to get previous close prices.
+func (p *DhanFeedProvider) fetchPrevClose(ctx context.Context) {
+	if p.requestBody == nil {
+		return
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, dhanOHLCEndpoint, bytes.NewReader(p.requestBody))
+	if err != nil {
+		log.Warn().Err(err).Msg("dhan: failed to create OHLC request")
+		return
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("access-token", p.accessToken)
+	if p.clientID != "" {
+		req.Header.Set("client-id", p.clientID)
+	}
+
+	resp, err := p.httpClient.Do(req)
+	if err != nil {
+		log.Warn().Err(err).Msg("dhan: OHLC request failed")
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		log.Warn().Int("status", resp.StatusCode).Str("body", string(body)).Msg("dhan: OHLC non-200")
+		return
+	}
+
+	var ohlcResp dhanOHLCResponse
+	if err := json.NewDecoder(resp.Body).Decode(&ohlcResp); err != nil {
+		log.Warn().Err(err).Msg("dhan: failed to decode OHLC response")
+		return
+	}
+
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	count := 0
+	for exchange, instruments := range ohlcResp.Data {
+		for secIDStr, data := range instruments {
+			key := fmt.Sprintf("%s:%s", exchange, secIDStr)
+			sym, ok := p.secIDToSymbol[key]
+			if !ok {
+				secID, err := strconv.Atoi(secIDStr)
+				if err != nil {
+					continue
+				}
+				key = fmt.Sprintf("%s:%d", exchange, secID)
+				sym, ok = p.secIDToSymbol[key]
+				if !ok {
+					continue
+				}
+			}
+			if data.Close > 0 {
+				p.prevClose[sym.Symbol] = data.Close
+				count++
+			}
+		}
+	}
+	log.Info().Int("symbols_with_close", count).Msg("dhan: fetched previous close prices")
+}
+
+type dhanOHLCResponse struct {
+	Data map[string]map[string]dhanOHLCData `json:"data"`
+}
+
+type dhanOHLCData struct {
+	Open  float64 `json:"open"`
+	High  float64 `json:"high"`
+	Low   float64 `json:"low"`
+	Close float64 `json:"close"`
 }
 
 // dhanLTPResponse represents the Dhan Market Feed LTP API response.
@@ -288,18 +381,24 @@ func (p *DhanFeedProvider) poll(ctx context.Context) {
 			p.lastPrices[sym.Symbol] = data.LastPrice
 			p.mu.Unlock()
 
-			// Build tick with available data. LTP endpoint only gives last_price,
-			// so we approximate OHLC from what we have.
+			// Use previous close for accurate change % calculation.
+			p.mu.RLock()
+			closePrice, hasClose := p.prevClose[sym.Symbol]
+			p.mu.RUnlock()
+			if !hasClose {
+				closePrice = prevPrice // Fallback to last polled price.
+			}
+
 			tick := Tick{
-				Symbol:    sym.Symbol,
+				Symbol:    cleanSymbolName(sym.Symbol),
 				Timestamp: now,
 				Segment:   sym.Segment,
 				LastPrice: data.LastPrice,
-				Open:      prevPrice,  // Best approximation; first poll will use LTP.
-				High:      data.LastPrice, // Updated per-poll; not session OHLC.
+				Open:      closePrice,
+				High:      data.LastPrice,
 				Low:       data.LastPrice,
-				Close:     prevPrice,
-				Volume:    0, // LTP endpoint does not provide volume.
+				Close:     closePrice,
+				Volume:    0,
 				OI:        0,
 				Bid:       0,
 				Ask:       0,
