@@ -327,8 +327,8 @@ func createFeedProvider(broker string, symbols []feed.SymbolConfig, mapping *fee
 			log.Warn().Msg("dhan access token not configured, falling back to paper feed")
 			return feed.NewPaperFeedProvider(symbols)
 		}
-		log.Info().Str("broker", "dhan").Msg("using Dhan LTP feed provider")
-		return feed.NewDhanFeedProvider(accessToken, clientID, symbols)
+		log.Info().Str("broker", "dhan").Msg("using Dhan WebSocket feed provider")
+		return feed.NewDhanWSFeedProvider(accessToken, clientID, symbols)
 	case "zerodha":
 		// Zerodha integration not yet implemented.
 		log.Warn().Str("broker", broker).Msg("broker integration not yet implemented, falling back to paper feed")

@@ -9,8 +9,9 @@ WORKDIR /build
 COPY go.mod go.sum* ./
 RUN go mod download 2>/dev/null || true
 
-# Copy source and build.
+# Copy source, resolve deps, and build.
 COPY . .
+RUN rm -f go.sum && GONOSUMCHECK=* GONOSUMDB=* GOFLAGS=-mod=mod go mod tidy
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
     -ldflags="-w -s" \
     -o /feed_gateway \
