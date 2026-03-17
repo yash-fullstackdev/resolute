@@ -58,7 +58,7 @@ export const INDICATOR_NAMES: Record<string, string> = {
   IV_RANK: "IV Rank",
 };
 
-export const UNDERLYINGS = ["NIFTY", "BANKNIFTY", "FINNIFTY", "RELIANCE", "HDFCBANK", "INFY", "TCS", "ICICIBANK"];
+export const UNDERLYINGS = ["NIFTY", "BANKNIFTY", "FINNIFTY", "RELIANCE", "HDFCBANK", "INFY", "TCS", "ICICIBANK", "SBIN", "MIDCPNIFTY"];
 
 export const REGIME_COLORS: Record<string, string> = {
   TRENDING_UP: "text-profit bg-profit/10",

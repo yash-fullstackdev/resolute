@@ -8,7 +8,14 @@ import { formatINR } from "@/lib/formatters";
 import { useLiveDataStore } from "@/stores/liveDataStore";
 import { useWebSocket } from "@/hooks/useWebSocket";
 import type { ApiResponse } from "@/types/api";
-import { Plus, Trash2, X, Eye, ArrowLeft, TrendingUp, TrendingDown, Minus } from "lucide-react";
+import { Plus, Trash2, X, Eye, ArrowLeft, TrendingUp, TrendingDown, Minus, Search } from "lucide-react";
+
+const ALL_SYMBOLS = {
+  "Indices": ["NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY"],
+  "Large Cap": ["RELIANCE", "HDFCBANK", "INFY", "TCS", "ICICIBANK", "SBIN"],
+} as const;
+
+const ALL_SYMBOL_LIST = Object.values(ALL_SYMBOLS).flat();
 
 interface Watchlist {
   id: string;
@@ -24,6 +31,7 @@ export default function WatchlistPage() {
   const queryClient = useQueryClient();
   const [newName, setNewName] = useState("");
   const [selectedWatchlist, setSelectedWatchlist] = useState<Watchlist | null>(null);
+  const [symbolSearch, setSymbolSearch] = useState("");
 
   const { data: watchlists, isLoading } = useQuery<Watchlist[]>({
     queryKey: ["watchlists"],
@@ -196,22 +204,45 @@ export default function WatchlistPage() {
 
         {/* Add symbols section */}
         <div className="rounded-xl border border-surface-border bg-surface p-5">
-          <p className="mb-3 text-sm font-medium text-slate-300">Add symbols</p>
-          <div className="flex flex-wrap gap-2">
-            {UNDERLYINGS.filter((s) => !activeWatchlist.symbols.includes(s)).map((sym) => (
-              <button
-                key={sym}
-                onClick={() => addSymbol(activeWatchlist, sym)}
-                className="flex items-center gap-1 rounded-lg border border-surface-border px-3 py-1.5 text-sm text-slate-400 transition-colors hover:border-accent/50 hover:bg-accent/10 hover:text-white"
-              >
-                <Plus className="h-3 w-3" />
-                {sym}
-              </button>
-            ))}
-            {UNDERLYINGS.filter((s) => !activeWatchlist.symbols.includes(s)).length === 0 && (
-              <span className="text-sm text-slate-500">All available symbols added</span>
-            )}
+          <div className="flex items-center justify-between mb-4">
+            <p className="text-sm font-medium text-slate-300">Add symbols</p>
+            <div className="relative">
+              <Search className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-500" />
+              <input
+                type="text"
+                value={symbolSearch}
+                onChange={(e) => setSymbolSearch(e.target.value.toUpperCase())}
+                placeholder="Search..."
+                className="rounded-lg border border-surface-border bg-surface-dark pl-8 pr-3 py-1.5 text-xs text-white placeholder-slate-500 focus:border-accent focus:outline-none w-40"
+              />
+            </div>
           </div>
+          {Object.entries(ALL_SYMBOLS).map(([category, symbols]) => {
+            const available = symbols.filter(
+              (s) => !activeWatchlist.symbols.includes(s) && (!symbolSearch || s.includes(symbolSearch))
+            );
+            if (available.length === 0) return null;
+            return (
+              <div key={category} className="mb-3">
+                <p className="mb-1.5 text-xs font-medium uppercase tracking-wider text-slate-500">{category}</p>
+                <div className="flex flex-wrap gap-1.5">
+                  {available.map((sym) => (
+                    <button
+                      key={sym}
+                      onClick={() => addSymbol(activeWatchlist, sym)}
+                      className="flex items-center gap-1 rounded-lg border border-surface-border px-3 py-1.5 text-sm text-slate-400 transition-colors hover:border-accent/50 hover:bg-accent/10 hover:text-white"
+                    >
+                      <Plus className="h-3 w-3" />
+                      {sym}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            );
+          })}
+          {ALL_SYMBOL_LIST.filter((s) => !activeWatchlist.symbols.includes(s)).length === 0 && (
+            <span className="text-sm text-slate-500">All available symbols added</span>
+          )}
         </div>
       </div>
     );
