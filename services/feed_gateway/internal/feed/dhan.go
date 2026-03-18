@@ -19,7 +19,7 @@ import (
 )
 
 const (
-	dhanLTPEndpoint    = "https://api.dhan.co/v2/marketfeed/ltp"
+	dhanQuoteEndpoint    = "https://api.dhan.co/v2/marketfeed/quote"
 	dhanRestPollInterval = 2 * time.Second
 )
 
@@ -97,6 +97,78 @@ func cleanSymbolName(sym string) string {
 		return strings.TrimPrefix(sym, "MCX:")
 	}
 	return sym
+}
+
+const dhanOHLCEndpoint = "https://api.dhan.co/v2/marketfeed/ohlc"
+
+// fetchOHLC calls the Dhan OHLC endpoint to get previous close prices.
+func (p *DhanWSFeedProvider) fetchOHLC(ctx context.Context, requestBody []byte) {
+	httpClient := &http.Client{Timeout: 5 * time.Second}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, dhanOHLCEndpoint, bytes.NewReader(requestBody))
+	if err != nil {
+		log.Warn().Err(err).Msg("dhan: failed to create OHLC request")
+		return
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("access-token", p.accessToken)
+	if p.clientID != "" {
+		req.Header.Set("client-id", p.clientID)
+	}
+
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		log.Warn().Err(err).Msg("dhan: OHLC request failed")
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		log.Warn().Int("status", resp.StatusCode).Str("body", string(body)).Msg("dhan: OHLC non-200")
+		return
+	}
+
+	var ohlcResp struct {
+		Data map[string]map[string]struct {
+			Open  float64 `json:"open"`
+			High  float64 `json:"high"`
+			Low   float64 `json:"low"`
+			Close float64 `json:"close"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&ohlcResp); err != nil {
+		log.Warn().Err(err).Msg("dhan: failed to decode OHLC response")
+		return
+	}
+
+	// Build reverse lookup from "exchange:secID" to symbol
+	revLookup := make(map[string]SymbolConfig)
+	for _, sym := range p.dhanSymbols {
+		inst, ok := dhanSecurityIDs[sym.Symbol]
+		if !ok {
+			continue
+		}
+		revLookup[fmt.Sprintf("%s:%d", inst.Exchange, inst.SecurityID)] = sym
+	}
+
+	p.mu.Lock()
+	count := 0
+	for exchange, instruments := range ohlcResp.Data {
+		for secIDStr, data := range instruments {
+			secID, _ := strconv.Atoi(secIDStr)
+			key := fmt.Sprintf("%s:%d", exchange, secID)
+			sym, ok := revLookup[key]
+			if !ok {
+				continue
+			}
+			if data.Close > 0 {
+				p.prevClose[sym.Symbol] = data.Close
+				count++
+			}
+		}
+	}
+	p.mu.Unlock()
+	log.Info().Int("symbols_with_close", count).Msg("dhan: fetched previous close prices via OHLC")
 }
 
 // DhanWSFeedProvider connects to Dhan's WebSocket Market Feed v2 for real-time ticks.
@@ -397,6 +469,7 @@ func (p *DhanWSFeedProvider) restPollFallback(ctx context.Context) {
 	if err != nil {
 		return
 	}
+
 	secLookup := make(map[string]SymbolConfig)
 	for _, sym := range p.dhanSymbols {
 		inst, ok := dhanSecurityIDs[sym.Symbol]
@@ -408,7 +481,7 @@ func (p *DhanWSFeedProvider) restPollFallback(ctx context.Context) {
 	httpClient := &http.Client{Timeout: 5 * time.Second}
 	ticker := time.NewTicker(dhanRestPollInterval)
 	defer ticker.Stop()
-	log.Info().Msg("dhan: REST polling fallback started")
+	log.Info().Msg("dhan: REST quote polling fallback started")
 	for {
 		select {
 		case <-ctx.Done():
@@ -422,7 +495,7 @@ func (p *DhanWSFeedProvider) restPollFallback(ctx context.Context) {
 		if handler == nil {
 			continue
 		}
-		req, err := http.NewRequestWithContext(ctx, http.MethodPost, dhanLTPEndpoint, bytes.NewReader(reqBody))
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, dhanQuoteEndpoint, bytes.NewReader(reqBody))
 		if err != nil {
 			continue
 		}
@@ -443,15 +516,22 @@ func (p *DhanWSFeedProvider) restPollFallback(ctx context.Context) {
 			}
 			continue
 		}
-		var ltpResp struct {
+		var quoteResp struct {
 			Data map[string]map[string]struct {
 				LastPrice float64 `json:"last_price"`
+				Volume    int64   `json:"volume"`
+				OHLC      struct {
+					Open  float64 `json:"open"`
+					High  float64 `json:"high"`
+					Low   float64 `json:"low"`
+					Close float64 `json:"close"`
+				} `json:"ohlc"`
 			} `json:"data"`
 		}
-		json.NewDecoder(resp.Body).Decode(&ltpResp)
+		json.NewDecoder(resp.Body).Decode(&quoteResp)
 		resp.Body.Close()
 		now := time.Now().UTC()
-		for exchange, instruments := range ltpResp.Data {
+		for exchange, instruments := range quoteResp.Data {
 			for secIDStr, data := range instruments {
 				secID, _ := strconv.Atoi(secIDStr)
 				key := fmt.Sprintf("%s:%d", exchange, secID)
@@ -459,18 +539,26 @@ func (p *DhanWSFeedProvider) restPollFallback(ctx context.Context) {
 				if !ok || data.LastPrice <= 0 {
 					continue
 				}
-				p.mu.RLock()
-				closePrice := p.prevClose[sym.Symbol]
-				p.mu.RUnlock()
-				if closePrice <= 0 {
-					closePrice = data.LastPrice
+				closePrice := data.OHLC.Close
+				if closePrice > 0 {
+					p.mu.Lock()
+					p.prevClose[sym.Symbol] = closePrice
+					p.mu.Unlock()
+				} else {
+					p.mu.RLock()
+					closePrice = p.prevClose[sym.Symbol]
+					p.mu.RUnlock()
 				}
 				handler(Tick{
 					Symbol:    cleanSymbolName(sym.Symbol),
 					Timestamp: now,
 					Segment:   sym.Segment,
 					LastPrice: data.LastPrice,
+					Open:      data.OHLC.Open,
+					High:      data.OHLC.High,
+					Low:       data.OHLC.Low,
 					Close:     closePrice,
+					Volume:    data.Volume,
 				})
 			}
 		}
