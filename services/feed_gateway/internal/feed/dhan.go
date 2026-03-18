@@ -1,16 +1,26 @@
 package feed
 
 import (
+	"bytes"
 	"context"
 	"encoding/binary"
+	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/gorilla/websocket"
 	"github.com/rs/zerolog/log"
+)
+
+const (
+	dhanLTPEndpoint    = "https://api.dhan.co/v2/marketfeed/ltp"
+	dhanRestPollInterval = 2 * time.Second
 )
 
 // dhanInstrument maps a canonical symbol to its Dhan security ID and exchange segment.
@@ -234,9 +244,12 @@ func (p *DhanWSFeedProvider) connectionLoop(ctx context.Context) {
 
 		if err != nil {
 			errMsg := err.Error()
-			// If rate-limited, use a much longer backoff.
 			if strings.Contains(errMsg, "429") {
-				delay = 30 * time.Second
+				// WebSocket rate-limited — fall back to REST polling until it clears.
+				log.Warn().Msg("dhan: websocket rate-limited, falling back to REST polling")
+				p.restPollFallback(ctx)
+				delay = dhanReconnectBaseDelay // Reset delay after REST fallback.
+				continue
 			}
 
 			log.Error().Err(err).Dur("retry_in", delay).Msg("dhan websocket disconnected, reconnecting")
@@ -368,6 +381,100 @@ func (p *DhanWSFeedProvider) sendSubscription(conn *websocket.Conn, requestCode 
 	}
 
 	return conn.WriteMessage(websocket.BinaryMessage, packet)
+}
+
+// restPollFallback polls the Dhan REST LTP endpoint every 2s as fallback when WebSocket is rate-limited.
+func (p *DhanWSFeedProvider) restPollFallback(ctx context.Context) {
+	exchangeMap := make(map[string][]int)
+	for _, sym := range p.dhanSymbols {
+		inst, ok := dhanSecurityIDs[sym.Symbol]
+		if !ok {
+			continue
+		}
+		exchangeMap[inst.Exchange] = append(exchangeMap[inst.Exchange], inst.SecurityID)
+	}
+	reqBody, err := json.Marshal(exchangeMap)
+	if err != nil {
+		return
+	}
+	secLookup := make(map[string]SymbolConfig)
+	for _, sym := range p.dhanSymbols {
+		inst, ok := dhanSecurityIDs[sym.Symbol]
+		if !ok {
+			continue
+		}
+		secLookup[fmt.Sprintf("%s:%d", inst.Exchange, inst.SecurityID)] = sym
+	}
+	httpClient := &http.Client{Timeout: 5 * time.Second}
+	ticker := time.NewTicker(dhanRestPollInterval)
+	defer ticker.Stop()
+	log.Info().Msg("dhan: REST polling fallback started")
+	for {
+		select {
+		case <-ctx.Done():
+			log.Info().Msg("dhan: REST polling fallback stopped")
+			return
+		case <-ticker.C:
+		}
+		p.mu.RLock()
+		handler := p.tickHandler
+		p.mu.RUnlock()
+		if handler == nil {
+			continue
+		}
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, dhanLTPEndpoint, bytes.NewReader(reqBody))
+		if err != nil {
+			continue
+		}
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("access-token", p.accessToken)
+		if p.clientID != "" {
+			req.Header.Set("client-id", p.clientID)
+		}
+		resp, err := httpClient.Do(req)
+		if err != nil {
+			continue
+		}
+		if resp.StatusCode != 200 {
+			io.Copy(io.Discard, resp.Body)
+			resp.Body.Close()
+			if resp.StatusCode == 429 {
+				time.Sleep(10 * time.Second)
+			}
+			continue
+		}
+		var ltpResp struct {
+			Data map[string]map[string]struct {
+				LastPrice float64 `json:"last_price"`
+			} `json:"data"`
+		}
+		json.NewDecoder(resp.Body).Decode(&ltpResp)
+		resp.Body.Close()
+		now := time.Now().UTC()
+		for exchange, instruments := range ltpResp.Data {
+			for secIDStr, data := range instruments {
+				secID, _ := strconv.Atoi(secIDStr)
+				key := fmt.Sprintf("%s:%d", exchange, secID)
+				sym, ok := secLookup[key]
+				if !ok || data.LastPrice <= 0 {
+					continue
+				}
+				p.mu.RLock()
+				closePrice := p.prevClose[sym.Symbol]
+				p.mu.RUnlock()
+				if closePrice <= 0 {
+					closePrice = data.LastPrice
+				}
+				handler(Tick{
+					Symbol:    cleanSymbolName(sym.Symbol),
+					Timestamp: now,
+					Segment:   sym.Segment,
+					LastPrice: data.LastPrice,
+					Close:     closePrice,
+				})
+			}
+		}
+	}
 }
 
 // SubscribeDynamic adds a single instrument to the live subscription set.
