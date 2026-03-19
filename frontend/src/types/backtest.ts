@@ -29,7 +29,8 @@ export interface BiasFilter {
 export interface BiasConfig {
   bias_filters: BiasFilter[];
   min_agreement: number;
-  cooldown_bars: number;
+  cooldown_bars?: number;
+  mode?: "bias_filtered" | "independent";
 }
 
 export interface StrategySlot {
@@ -40,6 +41,7 @@ export interface StrategySlot {
   max_fires_per_day: number;
   time_stop_bars: number;
   params: Record<string, number>;
+  bias_config?: BiasConfig;
 }
 
 export interface ExitConfig {

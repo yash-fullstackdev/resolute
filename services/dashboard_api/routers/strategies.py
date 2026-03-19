@@ -349,6 +349,7 @@ async def list_strategies(request: Request):
         if not isinstance(uc_params, dict):
             uc_params = {}
         instruments = uc_params.pop("instruments", [])
+        bias_config = uc_params.pop("bias_config", None)
 
         # Merge user's saved values into current_value
         params_with_overrides = []
@@ -358,7 +359,7 @@ async def list_strategies(request: Request):
                 p_copy["current_value"] = uc_params[p_copy["name"]]
             params_with_overrides.append(p_copy)
 
-        built_in.append({
+        entry = {
             "id": sid,
             "name": name,
             "display_name": name,
@@ -369,7 +370,10 @@ async def list_strategies(request: Request):
             "is_custom": False,
             "params": params_with_overrides,
             "instruments": instruments,
-        })
+        }
+        if bias_config and isinstance(bias_config, dict):
+            entry["bias_config"] = bias_config
+        built_in.append(entry)
 
     return {"success": True, "data": built_in}
 
@@ -378,6 +382,7 @@ class StrategyToggleBody(BaseModel):
     enabled: bool
     instruments: list[str] = Field(default_factory=list)
     params: dict | None = None
+    bias_config: dict | None = None  # per-strategy bias filter config
 
 
 @router.patch("/{strategy_id}")
@@ -399,10 +404,12 @@ async def toggle_strategy(request: Request, strategy_id: str):
                 {"tenant_id": tenant_id, "strategy_name": strategy_id},
             )
 
-            # Build params with instruments
+            # Build params with instruments and bias_config
             merged_params = body.params or {}
             if body.instruments:
                 merged_params["instruments"] = body.instruments
+            if body.bias_config is not None:
+                merged_params["bias_config"] = body.bias_config
 
             if existing.first() is None:
                 # Insert new config

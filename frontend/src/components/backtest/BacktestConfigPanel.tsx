@@ -88,10 +88,6 @@ const BACKTEST_STRATEGIES = [
   "ema_breakdown", "rsi_vwap_scalp", "ema33_ob", "smc_order_block",
 ];
 
-const DEFAULT_BIAS_FILTERS: BiasFilter[] = [
-  { type: "ema_crossover", timeframe: 5, params: { short: 2, long: 11 } },
-  { type: "supertrend", timeframe: 5, params: { period: 10, multiplier: 3.0 } },
-];
 
 const DEFAULT_EXIT: ExitConfig = {
   sl_atr_mult: 0.5,
@@ -160,15 +156,15 @@ const DEFAULT_SLOT: StrategySlot = {
   params: {},
 };
 
-// Will be populated from API data
+// Populated from API — strategy params + bias configs from DB
 let _dbStrategyParams: Record<string, Record<string, number>> = {};
+let _dbStrategyBias: Record<string, BiasConfig> = {};
 
 function getDefaultParams(stratName: string): Record<string, number> {
   const defs = STRATEGY_PARAMS[stratName];
   if (!defs) return {};
   const p: Record<string, number> = {};
   for (const d of defs) p[d.key] = d.default;
-  // Override with user's saved settings from DB (fetched via API)
   const dbVals = _dbStrategyParams[stratName];
   if (dbVals) {
     for (const [k, v] of Object.entries(dbVals)) {
@@ -178,6 +174,10 @@ function getDefaultParams(stratName: string): Record<string, number> {
   return p;
 }
 
+function getDefaultBiasForStrategy(stratName: string): BiasConfig | undefined {
+  return _dbStrategyBias[stratName];
+}
+
 export function BacktestConfigPanel({ onRun, isRunning }: BacktestConfigPanelProps) {
   const [instruments, setInstruments] = useState<BacktestInstrument[]>([]);
   const [strategyOptions, setStrategyOptions] = useState<BacktestStrategyOption[]>([]);
@@ -185,13 +185,9 @@ export function BacktestConfigPanel({ onRun, isRunning }: BacktestConfigPanelPro
   const [startDate, setStartDate] = useState("2025-01-01");
   const [endDate, setEndDate] = useState("2025-12-31");
 
-  const [biasFilters, setBiasFilters] = useState<BiasFilter[]>([...DEFAULT_BIAS_FILTERS]);
-  const [minAgreement, setMinAgreement] = useState(2);
-  const [cooldownBars, setCooldownBars] = useState(10);
   const [strategies, setStrategies] = useState<StrategySlot[]>([{ ...DEFAULT_SLOT }]);
   const [exitConfig, setExitConfig] = useState<ExitConfig>({ ...DEFAULT_EXIT });
 
-  const [biasOpen, setBiasOpen] = useState(true);
   const [exitOpen, setExitOpen] = useState(false);
 
   useEffect(() => {
@@ -218,11 +214,13 @@ export function BacktestConfigPanel({ onRun, isRunning }: BacktestConfigPanelPro
         complexity: "",
         description: s.description,
       })));
-      // Extract saved params (current_value) from DB for each strategy
+      // Extract saved params + bias configs from DB
       const dbParams: Record<string, Record<string, number>> = {};
+      const dbBias: Record<string, BiasConfig> = {};
       for (const s of all) {
-        const id = (s as Record<string, unknown>).id as string;
-        const params = (s as Record<string, unknown>).params as { name: string; current_value: number }[] | undefined;
+        const rec = s as Record<string, unknown>;
+        const id = rec.id as string;
+        const params = rec.params as { name: string; current_value: number }[] | undefined;
         if (id && params) {
           const vals: Record<string, number> = {};
           for (const p of params) {
@@ -230,40 +228,16 @@ export function BacktestConfigPanel({ onRun, isRunning }: BacktestConfigPanelPro
           }
           if (Object.keys(vals).length > 0) dbParams[id] = vals;
         }
+        // Capture bias_config from DB
+        const bc = rec.bias_config as BiasConfig | undefined;
+        if (id && bc && bc.bias_filters) {
+          dbBias[id] = bc;
+        }
       }
       _dbStrategyParams = dbParams;
+      _dbStrategyBias = dbBias;
     }).catch(() => {});
   }, []);
-
-  // ── Bias filter helpers ──────────────────────────────────────────────
-  function addBiasFilter() {
-    setBiasFilters([...biasFilters, { type: "ema_crossover", timeframe: 5, params: { short: 9, long: 21 } }]);
-  }
-  function removeBiasFilter(idx: number) {
-    setBiasFilters(biasFilters.filter((_, i) => i !== idx));
-  }
-  function updateBiasFilter(idx: number, updates: Partial<BiasFilter>) {
-    const next = [...biasFilters];
-    const f = { ...next[idx], ...updates };
-    // When type changes, reset params to defaults
-    if (updates.type && updates.type !== next[idx]?.type) {
-      const def = INDICATOR_TYPES[updates.type];
-      if (def) {
-        const newParams: Record<string, number> = {};
-        for (const p of def.params) newParams[p.key] = p.default;
-        f.params = newParams;
-      }
-    }
-    next[idx] = f as BiasFilter;
-    setBiasFilters(next);
-  }
-  function updateBiasFilterParam(idx: number, key: string, value: number) {
-    const next = [...biasFilters];
-    const cur = next[idx];
-    if (!cur) return;
-    next[idx] = { ...cur, params: { ...cur.params, [key]: value } };
-    setBiasFilters(next);
-  }
 
   // ── Strategy helpers ─────────────────────────────────────────────────
   function addStrategy() {
@@ -275,9 +249,17 @@ export function BacktestConfigPanel({ onRun, isRunning }: BacktestConfigPanelPro
   function updateSlot(idx: number, field: keyof StrategySlot, value: string | number | boolean) {
     const next = [...strategies];
     const updated = { ...next[idx], [field]: value } as StrategySlot;
-    // Reset params to defaults when strategy changes
     if (field === "name" && typeof value === "string") {
       updated.params = getDefaultParams(value);
+      // Load saved bias config from DB
+      const dbBias = getDefaultBiasForStrategy(value);
+      if (dbBias) {
+        updated.bias_config = dbBias;
+        updated.mode = dbBias.mode ?? "bias_filtered";
+      } else {
+        updated.bias_config = undefined;
+        updated.mode = "independent";
+      }
     }
     next[idx] = updated;
     setStrategies(next);
@@ -291,25 +273,17 @@ export function BacktestConfigPanel({ onRun, isRunning }: BacktestConfigPanelPro
   }
 
   function handleRun() {
-    const biasConfig: BiasConfig = {
-      bias_filters: biasFilters,
-      min_agreement: minAgreement,
-      cooldown_bars: cooldownBars,
-    };
     const req: MultiBacktestRequest = {
       instrument: selectedInstrument,
       start_date: startDate,
       end_date: endDate,
-      bias_config: biasConfig,
+      bias_config: { bias_filters: [], min_agreement: 1, cooldown_bars: 0 },
       strategies,
       exit_config: exitConfig,
     };
     onRun(req);
   }
 
-  const biasLabel = biasFilters.length > 0
-    ? `${biasFilters.map(f => `${INDICATOR_TYPES[f.type]?.label ?? f.type}@${f.timeframe}m`).join(" + ")} — min ${minAgreement} agree`
-    : "No filters";
 
   return (
     <div className="rounded-2xl border border-surface-border bg-surface-dark p-5 space-y-5">
@@ -330,84 +304,6 @@ export function BacktestConfigPanel({ onRun, isRunning }: BacktestConfigPanelPro
         <Field label="End Date">
           <input type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} className={INP} />
         </Field>
-      </div>
-
-      {/* ── Dynamic Bias Engine ── */}
-      <div className="border-t border-surface-border pt-3">
-        <button onClick={() => setBiasOpen((o) => !o)}
-          className="flex items-center gap-2 text-sm font-medium text-white hover:text-accent-light transition-colors w-full text-left">
-          {biasOpen ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
-          Bias Engine
-          <span className="text-xs text-slate-500 ml-2 truncate max-w-[400px]">({biasLabel})</span>
-        </button>
-        {biasOpen && (
-          <div className="mt-3 space-y-3">
-            {/* Consensus settings */}
-            <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-              <Field label="Min Agreement">
-                <input type="number" value={minAgreement} min={1} max={biasFilters.length || 1}
-                  onChange={(e) => setMinAgreement(Number(e.target.value))} className={INP} />
-              </Field>
-              <Field label="Cooldown (5m bars)">
-                <input type="number" value={cooldownBars} min={0} max={50}
-                  onChange={(e) => setCooldownBars(Number(e.target.value))} className={INP} />
-              </Field>
-            </div>
-
-            {/* Filter list */}
-            <div className="space-y-2">
-              {biasFilters.map((filter, idx) => {
-                const typeDef = INDICATOR_TYPES[filter.type];
-                return (
-                  <div key={idx} className="rounded-lg border border-surface-border/50 bg-surface-light/20 p-3">
-                    <div className="flex items-start gap-2">
-                      <div className="flex-1 grid grid-cols-2 gap-2 sm:grid-cols-[2fr_1fr_repeat(4,1fr)]">
-                        {/* Indicator type */}
-                        <Field label="Indicator">
-                          <select value={filter.type}
-                            onChange={(e) => updateBiasFilter(idx, { type: e.target.value })}
-                            className={SEL}>
-                            {Object.entries(INDICATOR_TYPES).map(([k, v]) => (
-                              <option key={k} value={k}>{v.label}</option>
-                            ))}
-                          </select>
-                        </Field>
-                        {/* Timeframe */}
-                        <Field label="TF (min)">
-                          <select value={filter.timeframe}
-                            onChange={(e) => updateBiasFilter(idx, { timeframe: Number(e.target.value) })}
-                            className={SEL}>
-                            {TF_OPTIONS.map((tf) => (
-                              <option key={tf} value={tf}>{tf}m</option>
-                            ))}
-                          </select>
-                        </Field>
-                        {/* Dynamic params */}
-                        {typeDef?.params.map((p) => (
-                          <Field key={p.key} label={p.label}>
-                            <input type="number"
-                              value={filter.params[p.key] ?? p.default}
-                              min={p.min} max={p.max} step={p.step ?? 1}
-                              onChange={(e) => updateBiasFilterParam(idx, p.key, Number(e.target.value))}
-                              className={INP} />
-                          </Field>
-                        ))}
-                      </div>
-                      <button onClick={() => removeBiasFilter(idx)}
-                        className="mt-5 rounded-lg p-1.5 text-slate-500 hover:bg-loss/10 hover:text-loss transition-colors">
-                        <Trash2 className="h-3.5 w-3.5" />
-                      </button>
-                    </div>
-                  </div>
-                );
-              })}
-              <button onClick={addBiasFilter}
-                className="flex items-center gap-1 rounded-lg border border-dashed border-surface-border px-3 py-1.5 text-xs text-slate-400 hover:border-accent-light hover:text-accent-light transition-colors">
-                <Plus className="h-3 w-3" /> Add Indicator Filter
-              </button>
-            </div>
-          </div>
-        )}
       </div>
 
       {/* ── Strategy Slots ── */}
@@ -479,6 +375,24 @@ export function BacktestConfigPanel({ onRun, isRunning }: BacktestConfigPanelPro
                     </Field>
                   ))}
                 </div>
+              </div>
+            )}
+            {/* Per-strategy bias info */}
+            {slot.name && slot.bias_config && slot.bias_config.bias_filters.length > 0 && (
+              <div className="border-t border-surface-border/40 pt-2 mt-2 flex items-center gap-2 text-xs">
+                <span className="rounded-full bg-accent/20 px-2 py-0.5 text-[10px] font-semibold text-accent-light">
+                  BIAS
+                </span>
+                <span className="text-slate-400">
+                  {slot.bias_config.bias_filters.map(f => {
+                    const def = INDICATOR_TYPES[f.type];
+                    return `${def?.label ?? f.type}@${f.timeframe}m`;
+                  }).join(" + ")}
+                  {" — min "}{slot.bias_config.min_agreement}{" agree"}
+                </span>
+                <span className="text-slate-600 ml-auto text-[10px]">
+                  (configured on /strategies)
+                </span>
               </div>
             )}
           </div>

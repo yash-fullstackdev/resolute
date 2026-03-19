@@ -13,6 +13,18 @@ export interface StrategyParam {
   max?: number;
 }
 
+export interface StrategyBiasFilter {
+  type: string;
+  timeframe: number;
+  params: Record<string, number>;
+}
+
+export interface StrategyBiasConfig {
+  bias_filters: StrategyBiasFilter[];
+  min_agreement: number;
+  mode: "bias_filtered" | "independent";
+}
+
 export interface Strategy {
   id: string;
   name: string;
@@ -23,6 +35,7 @@ export interface Strategy {
   enabled: boolean;
   params: StrategyParam[];
   instruments?: string[];
+  bias_config?: StrategyBiasConfig;
   win_rate?: number;
   avg_return?: number;
   total_trades?: number;

@@ -89,7 +89,8 @@ class StrategySlot(BaseModel):
     concurrent: bool = True
     max_fires_per_day: int = 5
     time_stop_bars: int = 20
-    params: dict[str, Any] = Field(default_factory=dict)  # strategy-specific params
+    params: dict[str, Any] = Field(default_factory=dict)
+    bias_config: dict[str, Any] | None = None  # per-strategy bias filters
 
 
 class ExitConfig(BaseModel):

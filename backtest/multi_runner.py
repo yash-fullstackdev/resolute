@@ -474,22 +474,49 @@ def run(config: dict) -> dict:
     sd = _date.fromisoformat(start_date) if isinstance(start_date, str) else start_date
     actual_start_ts = datetime(sd.year, sd.month, sd.day, 9, 0, tzinfo=IST).timestamp()
 
-    # ── Dynamic bias pre-computation ──────────────────────────────────
-    from .bias_engine import precompute_dynamic_bias, convert_legacy_bias_config, aggregate_np
+    # ── Per-strategy bias pre-computation ────────────────────────────
+    from services.user_worker_pool.bias.evaluator import BiasEvaluator, aggregate_candles, atr_full
 
-    # Support both new bias_filters format and legacy bias_config format
-    bias_filters = bias_cfg.get("bias_filters", None)
-    if bias_filters is None:
-        # Legacy format — convert toggle-based config to filter list
-        bias_filters = convert_legacy_bias_config(bias_cfg)
-
-    min_agreement = bias_cfg.get("min_agreement", 2)
-    precomp = precompute_dynamic_bias(data_1m, bias_filters, min_agreement)
-
-    bias_cache = precomp.get("bias", [])
-    atr_cache = precomp.get("atr", [])
-    data_5m = precomp.get("primary_data", {})
+    # Build 5m candles from 1m (needed for strategy signals + ATR)
+    data_5m = aggregate_candles(data_1m, 300)
     ts_5m = data_5m.get("timestamp", np.array([]))
+    n_5m = len(data_5m.get("close", []))
+
+    # Compute ATR(14) on 5m — shared across all strategies
+    atr_arr = atr_full(data_5m["high"], data_5m["low"], data_5m["close"], 14) if n_5m > 15 else np.array([])
+    atr_cache: list[float | None] = [None] * n_5m
+    for ai in range(len(atr_arr)):
+        if 14 + ai < n_5m:
+            atr_cache[14 + ai] = float(atr_arr[ai])
+
+    # Per-strategy bias caches (keyed by strategy name)
+    # Each strategy can have its own bias_config, or fall back to global
+    strategy_bias_caches: dict[str, list] = {}
+    _bias_config_cache: dict[str, tuple] = {}  # deduplicate identical configs
+
+    for slot in slots:
+        s_name = slot["name"]
+        if s_name in strategy_bias_caches:
+            continue
+
+        # Priority: per-strategy bias_config > global bias_config
+        s_bias_cfg = slot.get("bias_config") or bias_cfg
+        s_mode = s_bias_cfg.get("mode", slot.get("mode", "independent"))
+
+        if s_mode != "bias_filtered" or not s_bias_cfg.get("bias_filters"):
+            strategy_bias_caches[s_name] = [None] * n_5m
+            continue
+
+        # Deduplicate: if two strategies share identical bias config, reuse
+        config_key = str(sorted(str(s_bias_cfg).lower()))
+        if config_key in _bias_config_cache:
+            strategy_bias_caches[s_name] = _bias_config_cache[config_key]
+            continue
+
+        evaluator = BiasEvaluator(s_bias_cfg)
+        bias_list, _ = evaluator.precompute_bias_array(data_1m)
+        strategy_bias_caches[s_name] = bias_list
+        _bias_config_cache[config_key] = bias_list
 
     # ── 5m close events ───────────────────────────────────────────────
     five_m_close_set = _build_5m_close_set(timestamps, ts_5m)
@@ -522,8 +549,6 @@ def run(config: dict) -> dict:
     open_concurrent: list[dict] = []
 
     daily_fires: dict[str, int] = defaultdict(int)
-    last_bias = None
-    last_bias_change_bar = -999
 
     cumulative_pnl = 0.0
     peak_pnl = 0.0
@@ -540,7 +565,6 @@ def run(config: dict) -> dict:
     afternoon_start = 780  # 13:00
     entry_cutoff = 870  # 14:30
     force_exit_min = 915  # 15:15
-    cooldown_bars = bias_cfg.get("cooldown_bars", 10)
 
     # ── Build sorted list of 5m close 1m-indices ─────────────────────
     five_m_close_indices = sorted(five_m_close_set)
@@ -649,20 +673,12 @@ def run(config: dict) -> dict:
         if n5 < 15:
             continue
 
-        bias = bias_cache[n5 - 1] if n5 - 1 < len(bias_cache) else None
         atr = atr_cache[n5 - 1] if n5 - 1 < len(atr_cache) else None
-
-        # Bias cooldown
-        if bias != last_bias:
-            if last_bias is not None and bias is not None:
-                last_bias_change_bar = i
-            last_bias = bias
-        in_cooldown = (i - last_bias_change_bar) < cooldown_bars
 
         is_morning = entry_start <= t_min <= morning_end
         is_afternoon = afternoon_start <= t_min <= entry_cutoff
 
-        if not (is_morning or is_afternoon) or in_cooldown or not atr or atr <= 0:
+        if not (is_morning or is_afternoon) or not atr or atr <= 0:
             if idx_pos % 5 == 0:
                 dd = peak_pnl - cumulative_pnl
                 equity_snapshots.append({
@@ -672,12 +688,11 @@ def run(config: dict) -> dict:
                 })
             continue
 
-        # ── Strategy evaluation ───────────────────────────────────────
+        # ── Strategy evaluation (per-strategy bias) ───────────────────
 
         for slot in slots:
             s_name = slot["name"]
             s_session = slot.get("session", "all")
-            s_mode = slot.get("mode", "bias_filtered")
             s_concurrent = slot.get("concurrent", s_name in CONCURRENT_BY_DEFAULT)
             s_max_fires = slot.get("max_fires_per_day", 5)
             s_time_stop = slot.get("time_stop_bars", exit_cfg["max_hold_bars"])
@@ -688,8 +703,16 @@ def run(config: dict) -> dict:
                 continue
             if daily_fires.get(s_name, 0) >= s_max_fires:
                 continue
-            if s_mode == "bias_filtered" and not bias:
-                continue
+
+            # Per-strategy bias check
+            s_bias_cache = strategy_bias_caches.get(s_name, [])
+            s_bias = s_bias_cache[n5 - 1] if n5 - 1 < len(s_bias_cache) else None
+            s_mode = slot.get("mode", "independent")
+            # Also check per-strategy bias_config mode
+            s_bias_cfg = slot.get("bias_config") or bias_cfg
+            if s_bias_cfg.get("mode") == "bias_filtered" or s_mode == "bias_filtered":
+                if not s_bias:
+                    continue
             if s_concurrent:
                 if any(ot["strategy"] == s_name for ot in open_concurrent):
                     continue
@@ -708,7 +731,8 @@ def run(config: dict) -> dict:
             else:
                 continue
 
-            if s_mode == "bias_filtered" and sig_dir != bias:
+            # Signal must align with this strategy's bias direction
+            if (s_bias_cfg.get("mode") == "bias_filtered" or s_mode == "bias_filtered") and s_bias and sig_dir != s_bias:
                 continue
 
             slip = exit_cfg["slippage_pts"]
@@ -726,7 +750,7 @@ def run(config: dict) -> dict:
             new_trade = {
                 "direction": sig_dir, "entry_price": entry,
                 "sl": sl, "tp": tp, "entry_bar": i, "entry_ts": float(ts),
-                "strategy": s_name, "atr": atr, "bias": bias,
+                "strategy": s_name, "atr": atr, "bias": s_bias,
                 "max_hold": s_time_stop,
             }
 
