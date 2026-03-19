@@ -219,9 +219,13 @@ services:
           cpus: "0.50"
 
   dashboard_api:
-    build: ./services/dashboard_api
+    build:
+      context: .
+      dockerfile: services/dashboard_api/Dockerfile
     ports:
       - "8000:8000"
+    volumes:
+      - ./data:/data:ro          # Historical OHLCV data for backtesting
     environment:
       NATS_URL: nats://nats:4222
       DATABASE_URL: ${DATABASE_URL}
@@ -229,6 +233,7 @@ services:
       JWT_SECRET: ${JWT_SECRET}
       ADMIN_JWT_SECRET: ${ADMIN_JWT_SECRET}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      BACKTEST_DATA_PATH: /data  # Path inside container to OHLCV data
     depends_on:
       nats:
         condition: service_healthy

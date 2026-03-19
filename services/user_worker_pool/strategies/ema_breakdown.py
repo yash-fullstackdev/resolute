@@ -1,8 +1,8 @@
-"""EMABreakdownStrategy — EMA 2/11 crossover or strong continuation with RSI + volume.
+"""EMABreakdownStrategy — EMA 2/11 crossover or strong continuation with RSI.
 
 Entry:
-  BUY: EMA2 > EMA11, fresh cross or continuation, RSI 50–65, volume > 1.1x avg.
-  SELL: EMA2 < EMA11, fresh cross or continuation, RSI 35–50, volume > 1.1x avg.
+  BUY: EMA2 > EMA11, fresh cross or continuation, RSI 50–65.
+  SELL: EMA2 < EMA11, fresh cross or continuation, RSI 35–50.
 Max 3 fires per day per underlying.
 """
 
@@ -15,7 +15,7 @@ import structlog
 
 from ..capital_tier import CapitalTier, StrategyCategory
 from .base import BaseStrategy, Signal, Leg, Position
-from .indicators import ema, atr_wilder, rsi_wilder, volume_ratio
+from .indicators import ema, atr_wilder, rsi_wilder
 
 logger = structlog.get_logger(service="user_worker_pool", module="ema_breakdown")
 
@@ -66,7 +66,6 @@ class EMABreakdownStrategy(BaseStrategy):
         closes = data_5m["close"]
         highs = data_5m["high"]
         lows = data_5m["low"]
-        volumes = data_5m.get("volume", [])
 
         if len(closes) < ema_long + 3:
             return None
@@ -104,12 +103,6 @@ class EMABreakdownStrategy(BaseStrategy):
         if not rsi_vals:
             return None
         rsi = rsi_vals[-1]
-
-        if not volumes or len(volumes) < 20:
-            return None
-        vol_rat = volume_ratio(volumes, period=20)
-        if vol_rat < 1.1:
-            return None
 
         signal_dir = None
 
@@ -190,7 +183,6 @@ class EMABreakdownStrategy(BaseStrategy):
                 "ema_gap": round(ema_s_curr - ema_l_curr, 2),
                 "rsi": round(rsi, 1),
                 "atr_pct": round(atr_pct * 100, 3),
-                "volume_ratio": round(vol_rat, 2),
             },
         )
 

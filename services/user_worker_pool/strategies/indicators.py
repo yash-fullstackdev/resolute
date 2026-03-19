@@ -205,13 +205,13 @@ def vwap_with_bands(highs: list[float], lows: list[float], closes: list[float],
 # Volume ratio
 # ─────────────────────────────────────────────────────────────────────────────
 
-def volume_ratio(volumes: list[float], period: int = 20) -> float:
+def volume_ratio(volumes, period: int = 20) -> float:
     """Current bar volume / average of previous `period` bars."""
-    if not volumes or len(volumes) < 2:
+    if volumes is None or len(volumes) < 2:
         return 0.0
-    curr = volumes[-1]
+    curr = float(volumes[-1])
     hist = volumes[-(period + 1):-1]
-    if not hist:
+    if len(hist) == 0:
         return 0.0
-    avg = sum(hist) / len(hist)
+    avg = float(sum(hist)) / len(hist)
     return curr / avg if avg > 0 else 0.0

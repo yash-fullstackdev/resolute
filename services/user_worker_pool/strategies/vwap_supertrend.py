@@ -14,7 +14,7 @@ import structlog
 
 from ..capital_tier import CapitalTier, StrategyCategory
 from .base import BaseStrategy, Signal, Leg, Position
-from .indicators import atr_wilder, vwap_with_bands, volume_ratio
+from .indicators import atr_wilder, vwap_with_bands
 
 logger = structlog.get_logger(service="user_worker_pool", module="vwap_supertrend")
 
@@ -99,7 +99,7 @@ class VWAPSupertrendStrategy(BaseStrategy):
         st_period = config.get("st_period", 10)
         st_mult = config.get("st_multiplier", 3.0)
         vwap_prox = config.get("vwap_proximity_pct", 0.0015)
-        vol_thr = config.get("vol_threshold", 1.1)
+
         max_fires = config.get("max_fires_per_day", 2)
 
         # ── daily fire limit ──────────────────────────────────────────
@@ -135,10 +135,6 @@ class VWAPSupertrendStrategy(BaseStrategy):
             return None
         distance_pct = abs(curr_close - curr_vwap) / curr_vwap
         if distance_pct > vwap_prox:
-            return None
-
-        vol_rat = volume_ratio(price_data["volume"], period=20)
-        if vol_rat < vol_thr:
             return None
 
         if st_dir == 1 and curr_close >= curr_vwap * (1 - vwap_prox):
@@ -204,7 +200,6 @@ class VWAPSupertrendStrategy(BaseStrategy):
                 "signal_type": signal_dir,
                 "vwap": round(curr_vwap, 2),
                 "st_direction": st_dir,
-                "volume_ratio": round(vol_rat, 2),
             },
         )
 

@@ -19,6 +19,7 @@ import {
   Grid3X3,
   BookOpen,
   FileText,
+  FlaskConical,
 } from "lucide-react";
 
 const navItems = [
@@ -30,6 +31,7 @@ const navItems = [
   { href: "/watchlist", label: "Watchlist", icon: Eye },
   { href: "/strategies", label: "Strategies", icon: Layers },
   { href: "/strategies/builder", label: "Builder", icon: Wrench },
+  { href: "/backtest", label: "Backtest", icon: FlaskConical },
   { href: "/discipline", label: "Discipline", icon: Shield },
   { href: "/performance", label: "Performance", icon: TrendingUp },
   { href: "/journal", label: "Journal", icon: BookOpen },

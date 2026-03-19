@@ -37,3 +37,6 @@ anthropic>=0.39.0
 
 # Timezone support (stdlib in 3.9+)
 tzdata==2024.2
+
+# Backtest engine (Python fallback + Rust wheel dep)
+numpy>=1.26,<3.0

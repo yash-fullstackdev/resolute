@@ -85,7 +85,7 @@ const (
 
 	// Reconnection parameters.
 	dhanReconnectBaseDelay = 2 * time.Second
-	dhanReconnectMaxDelay  = 60 * time.Second
+	dhanReconnectMaxDelay  = 10 * time.Second
 )
 
 // cleanSymbolName strips exchange prefixes like "NSE:" for the canonical tick symbol.

@@ -38,6 +38,7 @@ from .middleware.subscription import SubscriptionTierMiddleware
 from .models.schemas import ErrorDetail, ErrorResponse
 from .routers import (
     admin,
+    backtest,
     chain,
     config,
     discipline,
@@ -367,6 +368,7 @@ app.include_router(admin.router)
 app.include_router(user.router)
 app.include_router(watchlist.router)
 app.include_router(watchlist.symbols_router)
+app.include_router(backtest.router)
 
 # ── Socket.IO Mount ──────────────────────────────────────────────────────────
 

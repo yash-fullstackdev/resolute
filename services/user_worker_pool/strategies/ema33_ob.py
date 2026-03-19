@@ -111,7 +111,7 @@ class EMA33OBStrategy(BaseStrategy):
         atr_now = atr_v[-1]
         curr = closes_5m[-1]
         prev = closes_5m[-2]
-        o_curr = opens_5m[-1] if opens_5m else curr
+        o_curr = opens_5m[-1] if len(opens_5m) > 0 else curr
 
         # Hard block: RSI in no-trade zone
         if rsi_bear < rsi_now < rsi_bull:

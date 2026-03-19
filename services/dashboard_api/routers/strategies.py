@@ -272,54 +272,53 @@ async def list_strategies(request: Request):
     ]
 
     # Configurable params for technical strategies (shown on UI)
+    # Keys MUST match backtest STRATEGY_PARAMS for localStorage sync
     technical_params = {
         "ttm_squeeze": [
             {"name": "bb_period", "type": "number", "default_value": 20, "current_value": 20, "description": "Bollinger Bands lookback period", "min": 5, "max": 50},
-            {"name": "bb_std", "type": "number", "default_value": 2.0, "current_value": 2.0, "description": "Bollinger Bands std deviation multiplier", "min": 0.5, "max": 5.0},
+            {"name": "bb_std", "type": "number", "default_value": 2.0, "current_value": 2.0, "description": "Bollinger Bands std deviation multiplier", "min": 0.5, "max": 4.0},
+            {"name": "kc_period", "type": "number", "default_value": 20, "current_value": 20, "description": "Keltner Channel period", "min": 5, "max": 50},
+            {"name": "kc_atr_period", "type": "number", "default_value": 10, "current_value": 10, "description": "Keltner Channel ATR period", "min": 5, "max": 30},
             {"name": "kc_mult", "type": "number", "default_value": 1.5, "current_value": 1.5, "description": "Keltner Channel ATR multiplier", "min": 0.5, "max": 5.0},
-            {"name": "stop_loss_pct", "type": "number", "default_value": 40, "current_value": 40, "description": "Stop loss (% of premium)", "min": 10, "max": 80},
-            {"name": "target_pct", "type": "number", "default_value": 80, "current_value": 80, "description": "Target profit (% of premium)", "min": 20, "max": 300},
+            {"name": "max_sl_points", "type": "number", "default_value": 50, "current_value": 50, "description": "Max stop loss in index points", "min": 1, "max": 500},
         ],
         "supertrend_strategy": [
             {"name": "period", "type": "number", "default_value": 10, "current_value": 10, "description": "Supertrend ATR period", "min": 3, "max": 50},
             {"name": "multiplier", "type": "number", "default_value": 3.0, "current_value": 3.0, "description": "Supertrend ATR multiplier", "min": 1.0, "max": 10.0},
-            {"name": "stop_loss_pct", "type": "number", "default_value": 40, "current_value": 40, "description": "Stop loss (% of premium)", "min": 10, "max": 80},
-            {"name": "target_pct", "type": "number", "default_value": 80, "current_value": 80, "description": "Target profit (% of premium)", "min": 20, "max": 300},
+            {"name": "max_sl_points", "type": "number", "default_value": 20, "current_value": 20, "description": "Max stop loss in index points", "min": 1, "max": 200},
         ],
         "vwap_supertrend": [
             {"name": "st_period", "type": "number", "default_value": 10, "current_value": 10, "description": "Supertrend ATR period", "min": 3, "max": 50},
             {"name": "st_multiplier", "type": "number", "default_value": 3.0, "current_value": 3.0, "description": "Supertrend ATR multiplier", "min": 1.0, "max": 10.0},
-            {"name": "vwap_proximity_pct", "type": "number", "default_value": 0.15, "current_value": 0.15, "description": "Max distance from VWAP (%)", "min": 0.05, "max": 1.0},
-            {"name": "vol_threshold", "type": "number", "default_value": 1.1, "current_value": 1.1, "description": "Min volume ratio vs 20-bar avg", "min": 0.5, "max": 3.0},
-            {"name": "max_fires_per_day", "type": "number", "default_value": 2, "current_value": 2, "description": "Max signals per day", "min": 1, "max": 10},
+            {"name": "vwap_proximity_pct", "type": "number", "default_value": 0.0015, "current_value": 0.0015, "description": "Max distance from VWAP (decimal)", "min": 0.0005, "max": 0.01},
+            {"name": "max_sl_points", "type": "number", "default_value": 20, "current_value": 20, "description": "Max stop loss in index points", "min": 1, "max": 200},
         ],
         "ema_breakdown": [
-            {"name": "ema_short", "type": "number", "default_value": 2, "current_value": 2, "description": "Fast EMA period", "min": 2, "max": 20},
-            {"name": "ema_long", "type": "number", "default_value": 11, "current_value": 11, "description": "Slow EMA period", "min": 5, "max": 50},
-            {"name": "rsi_period", "type": "number", "default_value": 14, "current_value": 14, "description": "RSI lookback period", "min": 5, "max": 30},
-            {"name": "max_fires_per_day", "type": "number", "default_value": 3, "current_value": 3, "description": "Max signals per day", "min": 1, "max": 10},
-            {"name": "stop_loss_pct", "type": "number", "default_value": 40, "current_value": 40, "description": "Stop loss (% of premium)", "min": 10, "max": 80},
+            {"name": "ema_short", "type": "number", "default_value": 2, "current_value": 2, "description": "Fast EMA period", "min": 1, "max": 50},
+            {"name": "ema_long", "type": "number", "default_value": 11, "current_value": 11, "description": "Slow EMA period", "min": 2, "max": 100},
+            {"name": "rsi_period", "type": "number", "default_value": 14, "current_value": 14, "description": "RSI lookback period", "min": 2, "max": 50},
+            {"name": "breakaway_pct", "type": "number", "default_value": 0.0008, "current_value": 0.0008, "description": "Min breakaway from EMA (decimal)", "min": 0.0001, "max": 0.005},
+            {"name": "max_sl_points", "type": "number", "default_value": 20, "current_value": 20, "description": "Max stop loss in index points", "min": 1, "max": 200},
         ],
         "rsi_vwap_scalp": [
-            {"name": "rsi_period", "type": "number", "default_value": 14, "current_value": 14, "description": "RSI lookback period", "min": 5, "max": 30},
-            {"name": "rsi_oversold", "type": "number", "default_value": 30, "current_value": 30, "description": "RSI oversold threshold (BUY)", "min": 15, "max": 40},
-            {"name": "rsi_overbought", "type": "number", "default_value": 70, "current_value": 70, "description": "RSI overbought threshold (SELL)", "min": 60, "max": 85},
-            {"name": "max_fires_per_day", "type": "number", "default_value": 3, "current_value": 3, "description": "Max signals per day", "min": 1, "max": 10},
-            {"name": "stop_loss_pct", "type": "number", "default_value": 30, "current_value": 30, "description": "Stop loss (% of premium)", "min": 10, "max": 60},
+            {"name": "rsi_period", "type": "number", "default_value": 14, "current_value": 14, "description": "RSI lookback period", "min": 2, "max": 50},
+            {"name": "rsi_oversold", "type": "number", "default_value": 30, "current_value": 30, "description": "RSI oversold threshold (BUY)", "min": 5, "max": 50},
+            {"name": "rsi_overbought", "type": "number", "default_value": 70, "current_value": 70, "description": "RSI overbought threshold (SELL)", "min": 50, "max": 95},
+            {"name": "max_sl_points", "type": "number", "default_value": 15, "current_value": 15, "description": "Max stop loss in index points", "min": 1, "max": 200},
         ],
         "ema33_ob": [
-            {"name": "ema_period", "type": "number", "default_value": 33, "current_value": 33, "description": "EMA period", "min": 10, "max": 100},
-            {"name": "rsi_bull_threshold", "type": "number", "default_value": 60, "current_value": 60, "description": "RSI bullish zone threshold", "min": 50, "max": 75},
-            {"name": "rsi_bear_threshold", "type": "number", "default_value": 40, "current_value": 40, "description": "RSI bearish zone threshold", "min": 25, "max": 50},
-            {"name": "pullback_atr_mult", "type": "number", "default_value": 0.5, "current_value": 0.5, "description": "Pullback distance (x ATR)", "min": 0.2, "max": 2.0},
-            {"name": "max_fires_per_day", "type": "number", "default_value": 3, "current_value": 3, "description": "Max signals per day", "min": 1, "max": 10},
+            {"name": "ema_period", "type": "number", "default_value": 33, "current_value": 33, "description": "EMA period", "min": 5, "max": 200},
+            {"name": "rsi_period", "type": "number", "default_value": 14, "current_value": 14, "description": "RSI lookback period", "min": 2, "max": 50},
+            {"name": "rsi_bull_threshold", "type": "number", "default_value": 60, "current_value": 60, "description": "RSI bullish zone threshold", "min": 50, "max": 90},
+            {"name": "rsi_bear_threshold", "type": "number", "default_value": 40, "current_value": 40, "description": "RSI bearish zone threshold", "min": 10, "max": 50},
+            {"name": "pullback_atr_mult", "type": "number", "default_value": 0.5, "current_value": 0.5, "description": "Pullback distance (x ATR)", "min": 0.1, "max": 3.0},
+            {"name": "rejection_body_pct", "type": "number", "default_value": 0.0004, "current_value": 0.0004, "description": "Min rejection body size (decimal)", "min": 0.0001, "max": 0.005},
+            {"name": "max_sl_points", "type": "number", "default_value": 20, "current_value": 20, "description": "Max stop loss in index points", "min": 1, "max": 200},
         ],
         "smc_order_block": [
-            {"name": "ob_length", "type": "number", "default_value": 6, "current_value": 6, "description": "Swing pivot lookback bars", "min": 3, "max": 15},
-            {"name": "fvg_threshold", "type": "number", "default_value": 0.05, "current_value": 0.05, "description": "Min FVG gap size (%)", "min": 0.01, "max": 0.5},
-            {"name": "max_fires_per_day", "type": "number", "default_value": 5, "current_value": 5, "description": "Max signals per day", "min": 1, "max": 10},
-            {"name": "stop_loss_pct", "type": "number", "default_value": 40, "current_value": 40, "description": "Stop loss (% of premium)", "min": 10, "max": 80},
-            {"name": "target_pct", "type": "number", "default_value": 100, "current_value": 100, "description": "Target profit (% of premium)", "min": 20, "max": 300},
+            {"name": "ob_length", "type": "number", "default_value": 6, "current_value": 6, "description": "Swing pivot lookback bars", "min": 3, "max": 20},
+            {"name": "fvg_threshold", "type": "number", "default_value": 0.0005, "current_value": 0.0005, "description": "Min FVG gap size (decimal)", "min": 0.0001, "max": 0.005},
+            {"name": "max_sl_points", "type": "number", "default_value": 20, "current_value": 20, "description": "Max stop loss in index points", "min": 1, "max": 200},
         ],
     }
 
@@ -347,7 +346,18 @@ async def list_strategies(request: Request):
     for sid, name, cat, tier_req, desc in built_in_defs:
         uc = user_configs.get(sid, {})
         uc_params = uc.get("params", {})
-        instruments = uc_params.pop("instruments", []) if isinstance(uc_params, dict) else []
+        if not isinstance(uc_params, dict):
+            uc_params = {}
+        instruments = uc_params.pop("instruments", [])
+
+        # Merge user's saved values into current_value
+        params_with_overrides = []
+        for p in technical_params.get(sid, []):
+            p_copy = dict(p)
+            if p_copy["name"] in uc_params:
+                p_copy["current_value"] = uc_params[p_copy["name"]]
+            params_with_overrides.append(p_copy)
+
         built_in.append({
             "id": sid,
             "name": name,
@@ -357,7 +367,7 @@ async def list_strategies(request: Request):
             "min_capital_tier": tier_req,
             "enabled": uc.get("enabled", False),
             "is_custom": False,
-            "params": technical_params.get(sid, []),
+            "params": params_with_overrides,
             "instruments": instruments,
         })
 

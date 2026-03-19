@@ -20,7 +20,7 @@ import structlog
 
 from ..capital_tier import CapitalTier, StrategyCategory
 from .base import BaseStrategy, Signal, Leg, Position
-from .indicators import atr_wilder, volume_ratio
+from .indicators import atr_wilder
 from .smc_helpers import detect_bos_choch, detect_fvg, find_order_blocks
 
 logger = structlog.get_logger(service="user_worker_pool", module="smc_order_block")
@@ -110,15 +110,7 @@ class SMCOrderBlockStrategy(BaseStrategy):
         if state["trend"] == -1 and recent[-1] >= recent[0]:
             return None
 
-        # 5. Volume confirmation
-        volumes_1m = data_1m.get("volume", [])
-        if not volumes_1m or len(volumes_1m) < 20:
-            return None
-        vol_rat = volume_ratio(volumes_1m, period=20)
-        if vol_rat < 1.0:
-            return None
-
-        # 6. ATR regime
+        # 5. ATR regime
         atr_vals = atr_wilder(data_5m["high"], data_5m["low"], data_5m["close"], 14)
         if not atr_vals:
             return None
@@ -140,8 +132,6 @@ class SMCOrderBlockStrategy(BaseStrategy):
             confidence += 0.10
         if sweep:
             confidence += 0.15
-        if vol_rat > 1.3:
-            confidence += 0.05
         confidence = min(confidence, 0.95)
 
         spot = curr_price
@@ -200,7 +190,6 @@ class SMCOrderBlockStrategy(BaseStrategy):
                 "ob_btm": round(active_ob["btm"], 2),
                 "fvg_overlap": fvg_overlap,
                 "sweep": sweep,
-                "volume_ratio": round(vol_rat, 2),
             },
         )
 

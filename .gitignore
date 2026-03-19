@@ -60,3 +60,6 @@ tests/backtest/data/*.parquet
 # Logs
 *.log
 logs/
+
+
+*.json
