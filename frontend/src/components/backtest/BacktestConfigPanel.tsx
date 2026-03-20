@@ -181,14 +181,13 @@ function getDefaultBiasForStrategy(stratName: string): BiasConfig | undefined {
 export function BacktestConfigPanel({ onRun, isRunning }: BacktestConfigPanelProps) {
   const [instruments, setInstruments] = useState<BacktestInstrument[]>([]);
   const [strategyOptions, setStrategyOptions] = useState<BacktestStrategyOption[]>([]);
+  const [availableInstances, setAvailableInstances] = useState<Record<string, unknown>[]>([]);
   const [selectedInstrument, setSelectedInstrument] = useState("NIFTY_50");
   const [startDate, setStartDate] = useState("2025-01-01");
   const [endDate, setEndDate] = useState("2025-12-31");
 
   const [strategies, setStrategies] = useState<StrategySlot[]>([{ ...DEFAULT_SLOT }]);
-  const [exitConfig, setExitConfig] = useState<ExitConfig>({ ...DEFAULT_EXIT });
 
-  const [exitOpen, setExitOpen] = useState(false);
 
   useEffect(() => {
     apiClient.get("/backtest/instruments").then((r) => {
@@ -214,9 +213,10 @@ export function BacktestConfigPanel({ onRun, isRunning }: BacktestConfigPanelPro
         complexity: "",
         description: s.description,
       })));
-      // Extract saved params + bias configs from DB
+      // Extract saved params + bias + exit configs + instances from DB
       const dbParams: Record<string, Record<string, number>> = {};
       const dbBias: Record<string, BiasConfig> = {};
+      const allInstances: Record<string, unknown>[] = [];
       for (const s of all) {
         const rec = s as Record<string, unknown>;
         const id = rec.id as string;
@@ -228,14 +228,19 @@ export function BacktestConfigPanel({ onRun, isRunning }: BacktestConfigPanelPro
           }
           if (Object.keys(vals).length > 0) dbParams[id] = vals;
         }
-        // Capture bias_config from DB
         const bc = rec.bias_config as BiasConfig | undefined;
         if (id && bc && bc.bias_filters) {
           dbBias[id] = bc;
         }
+        // Collect instances
+        const instances = (rec.instances ?? []) as Record<string, unknown>[];
+        for (const inst of instances) {
+          allInstances.push({ ...inst, strategy_id: id, strategy_display: rec.display_name });
+        }
       }
       _dbStrategyParams = dbParams;
       _dbStrategyBias = dbBias;
+      setAvailableInstances(allInstances);
     }).catch(() => {});
   }, []);
 
@@ -251,7 +256,6 @@ export function BacktestConfigPanel({ onRun, isRunning }: BacktestConfigPanelPro
     const updated = { ...next[idx], [field]: value } as StrategySlot;
     if (field === "name" && typeof value === "string") {
       updated.params = getDefaultParams(value);
-      // Load saved bias config from DB
       const dbBias = getDefaultBiasForStrategy(value);
       if (dbBias) {
         updated.bias_config = dbBias;
@@ -264,6 +268,39 @@ export function BacktestConfigPanel({ onRun, isRunning }: BacktestConfigPanelPro
     next[idx] = updated;
     setStrategies(next);
   }
+
+  function loadInstance(idx: number, instanceId: string) {
+    const inst = availableInstances.find((i) => (i as Record<string, unknown>).instance_id === instanceId) as Record<string, unknown> | undefined;
+    if (!inst) return;
+    const next = [...strategies];
+    const stratId = inst.strategy_id as string;
+    const instParams = (inst.params ?? {}) as Record<string, number>;
+    const instBias = inst.bias_config as BiasConfig | undefined;
+    const instExit = inst.exit_config as ExitConfig | undefined;
+    next[idx] = {
+      name: stratId,
+      session: ((inst.session as string) ?? "all") as "morning" | "afternoon" | "all",
+      mode: instBias?.mode ?? "independent",
+      concurrent: true,
+      max_fires_per_day: 5,
+      time_stop_bars: instExit?.max_hold_bars ?? 20,
+      params: { ...getDefaultParams(stratId), ...instParams, max_sl_points: instParams.max_sl_points ?? 20 },
+      bias_config: instBias,
+      sl_atr_mult: instExit?.sl_atr_mult ?? 0.5,
+      tp_atr_mult: instExit?.tp_atr_mult ?? 1.5,
+      max_hold_bars: instExit?.max_hold_bars ?? 20,
+      slippage_pts: instExit?.slippage_pts ?? 0.5,
+    };
+    setStrategies(next);
+  }
+  function updateSlotBias(idx: number, updater: (slot: StrategySlot) => Partial<StrategySlot>) {
+    const next = [...strategies];
+    const cur = next[idx];
+    if (!cur) return;
+    next[idx] = { ...cur, ...updater(cur) } as StrategySlot;
+    setStrategies(next);
+  }
+
   function updateSlotParam(idx: number, key: string, value: number) {
     const next = [...strategies];
     const cur = next[idx];
@@ -273,13 +310,21 @@ export function BacktestConfigPanel({ onRun, isRunning }: BacktestConfigPanelPro
   }
 
   function handleRun() {
+    // Use per-strategy exit config if set, otherwise defaults
+    const firstSlot = strategies[0];
+    const exitCfg = {
+      sl_atr_mult: firstSlot?.sl_atr_mult ?? 0.5,
+      tp_atr_mult: firstSlot?.tp_atr_mult ?? 1.5,
+      max_hold_bars: firstSlot?.max_hold_bars ?? 20,
+      slippage_pts: firstSlot?.slippage_pts ?? 0.5,
+    };
     const req: MultiBacktestRequest = {
       instrument: selectedInstrument,
       start_date: startDate,
       end_date: endDate,
       bias_config: { bias_filters: [], min_agreement: 1, cooldown_bars: 0 },
       strategies,
-      exit_config: exitConfig,
+      exit_config: exitCfg,
     };
     onRun(req);
   }
@@ -318,6 +363,26 @@ export function BacktestConfigPanel({ onRun, isRunning }: BacktestConfigPanelPro
 
         {strategies.map((slot, idx) => (
           <div key={idx} className="rounded-xl border border-surface-border/60 bg-surface-light/30 p-4 space-y-3">
+            {/* Instance selector */}
+            {availableInstances.length > 0 && (
+              <div className="space-y-1">
+                <label className="text-[10px] font-medium text-slate-500 uppercase">Load from Instance</label>
+                <select
+                  value=""
+                  onChange={(e) => { if (e.target.value) loadInstance(idx, e.target.value); }}
+                  className={`${SEL} text-accent-light`}>
+                  <option value="">Select saved instance to auto-fill...</option>
+                  {availableInstances.map((inst) => {
+                    const r = inst as Record<string, unknown>;
+                    return (
+                      <option key={r.instance_id as string} value={r.instance_id as string}>
+                        {String(r.strategy_display ?? r.strategy_id)} — {String(r.instance_name)} ({String(r.mode)})
+                      </option>
+                    );
+                  })}
+                </select>
+              </div>
+            )}
             <div className="flex items-start justify-between gap-2">
               <div className="flex-1 grid grid-cols-2 gap-3 sm:grid-cols-6">
                 <div className="col-span-2 space-y-1">
@@ -377,58 +442,120 @@ export function BacktestConfigPanel({ onRun, isRunning }: BacktestConfigPanelPro
                 </div>
               </div>
             )}
-            {/* Per-strategy bias info */}
-            {slot.name && slot.bias_config && slot.bias_config.bias_filters.length > 0 && (
-              <div className="border-t border-surface-border/40 pt-2 mt-2 flex items-center gap-2 text-xs">
-                <span className="rounded-full bg-accent/20 px-2 py-0.5 text-[10px] font-semibold text-accent-light">
-                  BIAS
-                </span>
-                <span className="text-slate-400">
-                  {slot.bias_config.bias_filters.map(f => {
-                    const def = INDICATOR_TYPES[f.type];
-                    return `${def?.label ?? f.type}@${f.timeframe}m`;
-                  }).join(" + ")}
-                  {" — min "}{slot.bias_config.min_agreement}{" agree"}
-                </span>
-                <span className="text-slate-600 ml-auto text-[10px]">
-                  (configured on /strategies)
-                </span>
+            {/* Per-strategy exit rules */}
+            {slot.name && (
+              <div className="border-t border-surface-border/40 pt-2 mt-2">
+                <p className="text-[10px] font-medium text-slate-500 uppercase mb-2">Exit Rules</p>
+                <div className="grid grid-cols-4 gap-2">
+                  <Field label="SL x ATR">
+                    <input type="number" value={slot.sl_atr_mult ?? 0.5} min={0.1} max={5} step={0.1}
+                      onChange={(e) => updateSlot(idx, "sl_atr_mult", Number(e.target.value))} className={INP} />
+                  </Field>
+                  <Field label="TP x ATR">
+                    <input type="number" value={slot.tp_atr_mult ?? 1.5} min={0.5} max={10} step={0.1}
+                      onChange={(e) => updateSlot(idx, "tp_atr_mult", Number(e.target.value))} className={INP} />
+                  </Field>
+                  <Field label="Max Hold">
+                    <input type="number" value={slot.max_hold_bars ?? 20} min={1} max={375}
+                      onChange={(e) => updateSlot(idx, "max_hold_bars", Number(e.target.value))} className={INP} />
+                  </Field>
+                  <Field label="Slippage">
+                    <input type="number" value={slot.slippage_pts ?? 0.5} min={0} max={5} step={0.1}
+                      onChange={(e) => updateSlot(idx, "slippage_pts", Number(e.target.value))} className={INP} />
+                  </Field>
+                </div>
+              </div>
+            )}
+            {/* Per-strategy bias editor */}
+            {slot.name && (
+              <div className="border-t border-surface-border/40 pt-2 mt-2">
+                <div className="flex items-center gap-2 mb-2">
+                  <span className="text-[10px] font-medium text-slate-500 uppercase">Bias</span>
+                  <div className="flex gap-1">
+                    <button onClick={() => updateSlotBias(idx, () => ({ mode: "independent" }))}
+                      className={`rounded px-2 py-0.5 text-[10px] font-medium transition-colors ${
+                        slot.mode === "independent" ? "bg-surface-light text-white" : "text-slate-600 hover:text-slate-400"
+                      }`}>Off</button>
+                    <button onClick={() => updateSlotBias(idx, (s) => {
+                      const existing = s.bias_config;
+                      return {
+                        mode: "bias_filtered",
+                        bias_config: existing?.bias_filters?.length
+                          ? { ...existing, mode: "bias_filtered" as const }
+                          : { bias_filters: [{ type: "ema_crossover", timeframe: 5, params: { short: 2, long: 11 } }], min_agreement: 1, mode: "bias_filtered" as const },
+                      };
+                    })}
+                      className={`rounded px-2 py-0.5 text-[10px] font-medium transition-colors ${
+                        slot.mode === "bias_filtered" ? "bg-accent/20 text-accent-light" : "text-slate-600 hover:text-slate-400"
+                      }`}>Filtered</button>
+                  </div>
+                  {slot.mode === "bias_filtered" && slot.bias_config && (
+                    <div className="flex items-center gap-1 ml-auto">
+                      <span className="text-[9px] text-slate-600">Min agree:</span>
+                      <input type="number" value={slot.bias_config.min_agreement ?? 1} min={1}
+                        max={Math.max(slot.bias_config.bias_filters?.length ?? 1, 1)}
+                        onChange={(e) => updateSlotBias(idx, (s) => ({
+                          bias_config: { ...(s.bias_config ?? { bias_filters: [], min_agreement: 1, mode: "bias_filtered" as const }), min_agreement: Number(e.target.value) },
+                        }))}
+                        className="w-10 rounded border border-surface-border bg-surface-light px-1 py-0.5 text-[10px] text-white focus:outline-none" />
+                    </div>
+                  )}
+                </div>
+                {slot.mode === "bias_filtered" && slot.bias_config && (
+                  <div className="space-y-1.5">
+                    {(slot.bias_config.bias_filters ?? []).map((f, fi) => {
+                      const updateFilter = (updates: Partial<BiasFilter>) => {
+                        updateSlotBias(idx, (s) => {
+                          const bc = s.bias_config ?? { bias_filters: [], min_agreement: 1, mode: "bias_filtered" as const };
+                          const filters = [...bc.bias_filters];
+                          filters[fi] = { ...filters[fi], ...updates } as BiasFilter;
+                          return { bias_config: { ...bc, bias_filters: filters } };
+                        });
+                      };
+                      return (
+                        <div key={fi} className="flex items-center gap-1.5 rounded-lg bg-surface-dark/30 p-1.5">
+                          <select value={f.type} onChange={(e) => {
+                            const def = INDICATOR_TYPES[e.target.value];
+                            const newParams: Record<string, number> = {};
+                            if (def) for (const p of def.params) newParams[p.key] = p.default;
+                            updateFilter({ type: e.target.value, params: newParams });
+                          }} className="rounded border border-surface-border bg-surface-light px-1.5 py-1 text-[10px] text-white focus:outline-none min-w-[100px]">
+                            {Object.entries(INDICATOR_TYPES).map(([k, v]) => (
+                              <option key={k} value={k}>{v.label}</option>
+                            ))}
+                          </select>
+                          <select value={f.timeframe} onChange={(e) => updateFilter({ timeframe: Number(e.target.value) })}
+                            className="rounded border border-surface-border bg-surface-light px-1 py-1 text-[10px] text-white focus:outline-none w-14">
+                            {TF_OPTIONS.map((tf) => <option key={tf} value={tf}>{tf}m</option>)}
+                          </select>
+                          {INDICATOR_TYPES[f.type]?.params.map((p) => (
+                            <input key={p.key} type="number" value={f.params[p.key] ?? p.default}
+                              min={p.min} max={p.max} step={p.step ?? 1} title={p.label}
+                              onChange={(e) => updateFilter({ params: { ...f.params, [p.key]: Number(e.target.value) } })}
+                              className="rounded border border-surface-border bg-surface-light px-1 py-1 text-[10px] text-white focus:outline-none w-12" />
+                          ))}
+                          <button onClick={() => updateSlotBias(idx, (s) => {
+                            const bc = s.bias_config ?? { bias_filters: [], min_agreement: 1, mode: "bias_filtered" as const };
+                            const filters = bc.bias_filters.filter((_, i) => i !== fi);
+                            return { bias_config: { ...bc, bias_filters: filters }, mode: filters.length === 0 ? "independent" : "bias_filtered" };
+                          })} className="rounded p-0.5 text-slate-600 hover:text-loss transition-colors">
+                            <Trash2 className="h-3 w-3" />
+                          </button>
+                        </div>
+                      );
+                    })}
+                    <button onClick={() => updateSlotBias(idx, (s) => {
+                      const bc = s.bias_config ?? { bias_filters: [], min_agreement: 1, mode: "bias_filtered" as const };
+                      return { bias_config: { ...bc, bias_filters: [...bc.bias_filters, { type: "ema_crossover", timeframe: 5, params: { short: 9, long: 21 } }] } };
+                    })} className="flex items-center gap-1 text-[10px] text-slate-600 hover:text-accent-light transition-colors">
+                      <Plus className="h-2.5 w-2.5" /> Add filter
+                    </button>
+                  </div>
+                )}
               </div>
             )}
           </div>
         ))}
-      </div>
-
-      {/* ── Exit Config ── */}
-      <div className="border-t border-surface-border pt-3">
-        <button onClick={() => setExitOpen((o) => !o)}
-          className="flex items-center gap-2 text-sm font-medium text-white hover:text-accent-light transition-colors">
-          {exitOpen ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
-          Exit Config
-          <span className="text-xs text-slate-500 ml-2">
-            (SL={exitConfig.sl_atr_mult}x ATR, TP={exitConfig.tp_atr_mult}x ATR, Hold={exitConfig.max_hold_bars}m)
-          </span>
-        </button>
-        {exitOpen && (
-          <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-4">
-            <Field label="SL x ATR">
-              <input type="number" value={exitConfig.sl_atr_mult} min={0.1} max={5} step={0.1}
-                onChange={(e) => setExitConfig({ ...exitConfig, sl_atr_mult: Number(e.target.value) })} className={INP} />
-            </Field>
-            <Field label="TP x ATR">
-              <input type="number" value={exitConfig.tp_atr_mult} min={0.5} max={10} step={0.1}
-                onChange={(e) => setExitConfig({ ...exitConfig, tp_atr_mult: Number(e.target.value) })} className={INP} />
-            </Field>
-            <Field label="Max Hold (bars)">
-              <input type="number" value={exitConfig.max_hold_bars} min={1} max={375}
-                onChange={(e) => setExitConfig({ ...exitConfig, max_hold_bars: Number(e.target.value) })} className={INP} />
-            </Field>
-            <Field label="Slippage (pts)">
-              <input type="number" value={exitConfig.slippage_pts} min={0} max={5} step={0.1}
-                onChange={(e) => setExitConfig({ ...exitConfig, slippage_pts: Number(e.target.value) })} className={INP} />
-            </Field>
-          </div>
-        )}
       </div>
 
       {/* ── Run Button ── */}

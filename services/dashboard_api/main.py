@@ -11,6 +11,7 @@ Responsibilities:
   - Prometheus metrics on /metrics
 """
 
+import asyncio
 import json
 import os
 import time
@@ -281,12 +282,34 @@ async def lifespan(app: FastAPI):
     else:
         logger.error("database_connection_failed")
 
+    # ── Start Strategy Worker Pool (non-blocking) ──
+    # Spawns in background so HTTP server starts immediately.
+    app.state.worker_pool = None
+
+    async def _boot_workers():
+        try:
+            from .worker_bootstrap import start_worker_pool
+            pool = await start_worker_pool(app, nats_client)
+            app.state.worker_pool = pool
+        except Exception as exc:
+            logger.error("worker_pool_start_failed", error=str(exc))
+
+    asyncio.create_task(_boot_workers())
+
     logger.info("dashboard_api_started", version=APP_VERSION)
 
     yield
 
     # ── Shutdown ──
     logger.info("dashboard_api_shutting_down")
+
+    # Stop worker pool
+    if worker_pool:
+        try:
+            await worker_pool.stop_all()
+            logger.info("worker_pool_stopped")
+        except Exception:
+            pass
 
     # Unsubscribe from tick feed
     await tick_sub.unsubscribe()

@@ -38,14 +38,14 @@ ALLOWED_SYMBOLS = {
 }
 
 # Well-known index security IDs (not in the equity scrip master).
-INDEX_SECURITY_IDS = {"NIFTY": 13, "BANKNIFTY": 25, "FINNIFTY": 27, "MIDCPNIFTY": 442}
+INDEX_SECURITY_IDS = {"NIFTY": 13, "BANKNIFTY": 25, "FINNIFTY": 27, "MIDCPNIFTY": 442, "SENSEX": 51}
 
 NATS_FEED_SUBSCRIBE_SUBJECT = "feed.subscribe"
 
 
 def _get_exchange(symbol: str) -> str:
     """Return Dhan exchange segment for a symbol."""
-    indices = {"NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY"}
+    indices = {"NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY", "SENSEX"}
     return "IDX_I" if symbol in indices else "NSE_EQ"
 
 
@@ -147,26 +147,46 @@ async def _get_nse_equities() -> list[dict]:
     return _nse_equity_cache
 
 
+# Indices available for live trading + backtesting
+TRADABLE_INDICES = [
+    {"symbol": "NIFTY", "security_id": 13, "type": "INDEX", "display": "NIFTY 50"},
+    {"symbol": "BANKNIFTY", "security_id": 25, "type": "INDEX", "display": "BANK NIFTY"},
+    {"symbol": "FINNIFTY", "security_id": 27, "type": "INDEX", "display": "FINNIFTY"},
+    {"symbol": "MIDCPNIFTY", "security_id": 442, "type": "INDEX", "display": "MIDCAP NIFTY"},
+    {"symbol": "SENSEX", "security_id": 51, "type": "INDEX", "display": "SENSEX"},
+]
+
+
 @symbols_router.get("/search")
 async def search_symbols(
     request: Request,
     q: str = Query(default="", max_length=30),
     limit: int = Query(default=20, ge=1, le=100),
 ):
-    """Search NSE equity symbols by prefix."""
-    equities = await _get_nse_equities()
-
+    """Search tradable symbols — indices first, then NSE equities."""
     if not q:
         return {"success": True, "data": []}
 
     query_upper = q.strip().upper()
-    results = [
-        {"symbol": s["symbol"], "security_id": s["security_id"]}
+
+    # Match indices first (highest priority)
+    index_results = [
+        {"symbol": idx["symbol"], "security_id": idx["security_id"], "type": "INDEX"}
+        for idx in TRADABLE_INDICES
+        if query_upper in idx["symbol"] or query_upper in idx["display"].upper()
+    ]
+
+    # Then match equities
+    equities = await _get_nse_equities()
+    equity_results = [
+        {"symbol": s["symbol"], "security_id": s["security_id"], "type": "EQUITY"}
         for s in equities
         if s["symbol"].startswith(query_upper)
-    ][:limit]
+    ]
 
-    return {"success": True, "data": results}
+    # Combine: indices first, then equities, capped at limit
+    combined = index_results + equity_results
+    return {"success": True, "data": combined[:limit]}
 
 
 class WatchlistInput(BaseModel):

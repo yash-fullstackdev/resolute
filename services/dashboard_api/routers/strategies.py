@@ -236,6 +236,43 @@ INDICATOR_LIBRARY = [
 ]
 
 
+@router.get("/status")
+async def get_instance_status(request: Request):
+    """Get runtime status for all strategy instances — shows if they're running."""
+    tenant_id = request.state.tenant_id
+
+    pool = getattr(request.app.state, "worker_pool", None)
+    if pool is None:
+        return {"success": True, "data": [], "worker_running": False}
+
+    worker = pool.workers.get(tenant_id)
+    if worker is None:
+        return {"success": True, "data": [], "worker_running": False}
+
+    try:
+        statuses = worker.get_instance_statuses()
+    except Exception:
+        statuses = []
+
+    # Add candle store health info
+    candle_store = getattr(worker, "_candle_store", None)
+    feed_healthy = False
+    if candle_store:
+        # Check if any symbol has fresh ticks
+        for sym in getattr(candle_store, "_last_tick_time", {}).keys():
+            if not candle_store.is_tick_stale(sym, 60):
+                feed_healthy = True
+                break
+
+    return {
+        "success": True,
+        "data": statuses,
+        "worker_running": True,
+        "feed_healthy": feed_healthy,
+        "total_instances": len(statuses),
+    }
+
+
 @router.get("")
 async def list_strategies(request: Request):
     """List all built-in and custom strategies for the current user."""
@@ -243,31 +280,12 @@ async def list_strategies(request: Request):
     tier = request.state.tier
 
     built_in_defs = [
-        ("long_call", "Long Call", "BUYING", "STARTER", "Buy call options on bullish signals"),
-        ("long_put", "Long Put", "BUYING", "STARTER", "Buy put options on bearish signals"),
-        ("long_straddle", "Long Straddle", "BUYING", "STARTER", "Buy both call and put at ATM strike for volatility plays"),
-        ("long_strangle", "Long Strangle", "BUYING", "STARTER", "Buy OTM call and put for cheaper volatility exposure"),
-        ("bull_call_spread", "Bull Call Spread", "BUYING", "STARTER", "Buy lower strike call, sell higher strike call"),
-        ("bear_put_spread", "Bear Put Spread", "BUYING", "STARTER", "Buy higher strike put, sell lower strike put"),
-        ("rsi_reversal", "RSI Reversal Buyer", "BUYING", "STARTER", "Buy on RSI oversold/overbought reversals with MACD confirmation"),
-        ("supertrend_momentum", "SuperTrend Momentum", "BUYING", "STARTER", "Follow SuperTrend buy signals with volume confirmation"),
-        ("covered_call", "Covered Call", "HYBRID", "GROWTH", "Hold underlying and sell OTM calls for income"),
-        ("collar", "Collar", "HYBRID", "GROWTH", "Protective put + covered call for hedged positions"),
-        ("protective_put", "Protective Put", "HYBRID", "GROWTH", "Buy puts to protect long underlying positions"),
-        ("short_straddle", "Short Straddle", "SELLING", "PRO", "Sell ATM call and put for premium in range-bound markets"),
-        ("short_strangle", "Short Strangle", "SELLING", "PRO", "Sell OTM call and put for wider range premium collection"),
-        ("iron_condor", "Iron Condor", "SELLING", "PRO", "Sell OTM strangle with protective wings for defined risk"),
-        ("iron_butterfly", "Iron Butterfly", "SELLING", "PRO", "Sell ATM straddle with protective wings"),
-        ("jade_lizard", "Jade Lizard", "SELLING", "PRO", "Short put + short call spread for upside-protected premium"),
-        ("ratio_spread", "Ratio Spread", "SELLING", "PRO", "Buy one option, sell multiple at different strike"),
-        ("calendar_spread", "Calendar Spread", "SELLING", "PRO", "Sell near-term, buy far-term same strike for time decay"),
-        # TECHNICAL — candle-based strategies using indicators on 1m/5m data
         ("ttm_squeeze", "TTM Squeeze", "TECHNICAL", "STARTER", "Momentum breakout when Bollinger Bands squeeze inside Keltner Channels — fires on release with momentum confirmation"),
         ("supertrend_strategy", "Supertrend", "TECHNICAL", "STARTER", "Trend-following entry on Supertrend direction flip — catches major trend changes using ATR-based trailing bands"),
-        ("vwap_supertrend", "VWAP + Supertrend Combo", "TECHNICAL", "STARTER", "High-conviction entry combining VWAP proximity with Supertrend direction and volume surge confirmation"),
-        ("ema_breakdown", "EMA Breakdown", "TECHNICAL", "STARTER", "EMA 2/11 crossover or strong continuation with RSI momentum and volume confirmation — catches trends early"),
+        ("vwap_supertrend", "VWAP + Supertrend", "TECHNICAL", "STARTER", "High-conviction entry combining VWAP proximity with Supertrend direction and volume confirmation"),
+        ("ema_breakdown", "EMA Breakdown", "TECHNICAL", "STARTER", "EMA 2/11 crossover with RSI momentum — catches trends early with ATR regime filter"),
         ("rsi_vwap_scalp", "RSI VWAP Scalp", "TECHNICAL", "STARTER", "Mean-reversion scalp at VWAP bands — buys RSI oversold at lower band, sells overbought at upper band"),
-        ("ema33_ob", "33 EMA Option Buying", "TECHNICAL", "STARTER", "33 EMA pullback-rejection with RSI zone filter and VWAP confirmation"),
+        ("ema33_ob", "EMA 33 Pullback", "TECHNICAL", "STARTER", "33 EMA pullback-rejection with RSI zone filter and VWAP confirmation — catches trend continuations"),
         ("smc_order_block", "SMC Order Block", "TECHNICAL", "STARTER", "Smart Money Concepts — enters at institutional Order Blocks after Break of Structure with FVG and sweep confluence"),
     ]
 
@@ -322,41 +340,58 @@ async def list_strategies(request: Request):
         ],
     }
 
-    # Load user's enabled strategies + instruments from DB
-    user_configs: dict = {}
+    # Load ALL user instances from DB (multiple per strategy allowed)
+    user_instances: dict[str, list[dict]] = {}  # strategy_name → list of instance dicts
     try:
         async with rls_session(tenant_id) as session:
             result = await session.execute(
                 text("""
-                    SELECT strategy_name, enabled, params
+                    SELECT id, strategy_name, instance_name, enabled, params,
+                           trading_mode, session, max_daily_loss_pts, updated_at
                     FROM user_strategy_configs
                     WHERE tenant_id = :tenant_id
+                    ORDER BY strategy_name, updated_at
                 """),
                 {"tenant_id": tenant_id},
             )
             for row in result.mappings().all():
-                user_configs[row["strategy_name"]] = {
+                sname = row["strategy_name"]
+                raw_params = row["params"] if isinstance(row["params"], dict) else {}
+                instruments = raw_params.pop("instruments", [])
+                bias_config = raw_params.pop("bias_config", None)
+                exit_config = raw_params.pop("exit_config", None)
+
+                inst = {
+                    "instance_id": str(row["id"]),
+                    "instance_name": row["instance_name"] or sname,
                     "enabled": row["enabled"],
-                    "params": row["params"] if isinstance(row["params"], dict) else {},
+                    "mode": row["trading_mode"] or "disabled",
+                    "session": row["session"] or "all",
+                    "max_daily_loss_pts": row["max_daily_loss_pts"],
+                    "instruments": instruments if isinstance(instruments, list) else [],
+                    "params": raw_params,
+                    "updated_at": row["updated_at"].isoformat() if row["updated_at"] else None,
                 }
+                if bias_config and isinstance(bias_config, dict):
+                    inst["bias_config"] = bias_config
+                if exit_config and isinstance(exit_config, dict):
+                    inst["exit_config"] = exit_config
+                user_instances.setdefault(sname, []).append(inst)
     except Exception as exc:
         logger.warning("user_configs_load_failed", tenant_id=tenant_id, error=str(exc))
 
     built_in = []
     for sid, name, cat, tier_req, desc in built_in_defs:
-        uc = user_configs.get(sid, {})
-        uc_params = uc.get("params", {})
-        if not isinstance(uc_params, dict):
-            uc_params = {}
-        instruments = uc_params.pop("instruments", [])
-        bias_config = uc_params.pop("bias_config", None)
+        instances = user_instances.get(sid, [])
 
-        # Merge user's saved values into current_value
+        # Merge saved param values into technical_params for the first instance
+        # (backward compat — single instance case)
+        first_params = instances[0]["params"] if instances else {}
         params_with_overrides = []
         for p in technical_params.get(sid, []):
             p_copy = dict(p)
-            if p_copy["name"] in uc_params:
-                p_copy["current_value"] = uc_params[p_copy["name"]]
+            if p_copy["name"] in first_params:
+                p_copy["current_value"] = first_params[p_copy["name"]]
             params_with_overrides.append(p_copy)
 
         entry = {
@@ -366,13 +401,15 @@ async def list_strategies(request: Request):
             "description": desc,
             "category": cat,
             "min_capital_tier": tier_req,
-            "enabled": uc.get("enabled", False),
             "is_custom": False,
             "params": params_with_overrides,
-            "instruments": instruments,
+            "instances": instances,
+            # Backward compat fields (from first instance if exists)
+            "enabled": instances[0]["enabled"] if instances else False,
+            "instruments": instances[0]["instruments"] if instances else [],
         }
-        if bias_config and isinstance(bias_config, dict):
-            entry["bias_config"] = bias_config
+        if instances and instances[0].get("bias_config"):
+            entry["bias_config"] = instances[0]["bias_config"]
         built_in.append(entry)
 
     return {"success": True, "data": built_in}
@@ -481,6 +518,286 @@ async def toggle_strategy(request: Request, strategy_id: str):
             "instruments": body.instruments,
         },
     }
+
+
+# ── Instance CRUD ─────────────────────────────────────────────────────────────
+
+async def _ensure_feed_subscriptions(request: Request, instruments: list[str]):
+    """Subscribe feed_gateway to any instruments not yet subscribed.
+
+    Resolves security_ids from index map or scrip master,
+    publishes to NATS feed.subscribe for each new instrument.
+    """
+    if not instruments:
+        return
+
+    from .watchlist import _publish_feed_subscriptions
+    try:
+        await _publish_feed_subscriptions(request, instruments)
+    except Exception as exc:
+        logger.warning("feed_subscribe_failed", instruments=instruments, error=str(exc))
+
+
+class InstanceCreateBody(BaseModel):
+    strategy_name: str
+    instance_name: str
+    instruments: list[str] = Field(default_factory=list)
+    params: dict = Field(default_factory=dict)
+    bias_config: dict | None = None
+    session: str = "all"
+    mode: str = "paper"
+    max_daily_loss_pts: float | None = None
+
+
+class InstanceUpdateBody(BaseModel):
+    instance_name: str | None = None
+    enabled: bool | None = None
+    instruments: list[str] | None = None
+    params: dict | None = None
+    bias_config: dict | None = None
+    session: str | None = None
+    mode: str | None = None
+    max_daily_loss_pts: float | None = Field(default=None)
+
+
+@router.post("/instances")
+async def create_instance(request: Request, body: InstanceCreateBody):
+    """Create a new strategy instance."""
+    tenant_id = request.state.tenant_id
+
+    merged_params = dict(body.params)
+    if body.instruments:
+        merged_params["instruments"] = body.instruments
+        await _ensure_feed_subscriptions(request, body.instruments)
+    if body.bias_config is not None:
+        merged_params["bias_config"] = body.bias_config
+
+    try:
+        async with rls_session(tenant_id) as session:
+            result = await session.execute(
+                text("""
+                    INSERT INTO user_strategy_configs
+                        (tenant_id, strategy_name, instance_name, enabled, params,
+                         trading_mode, session, max_daily_loss_pts, updated_at)
+                    VALUES
+                        (:tenant_id, :strategy_name, :instance_name, :enabled,
+                         CAST(:params AS jsonb), :mode, :session, :max_daily_loss, NOW())
+                    RETURNING id
+                """),
+                {
+                    "tenant_id": tenant_id,
+                    "strategy_name": body.strategy_name,
+                    "instance_name": body.instance_name,
+                    "enabled": body.mode != "disabled",
+                    "params": json.dumps(merged_params),
+                    "mode": body.mode,
+                    "session": body.session,
+                    "max_daily_loss": body.max_daily_loss_pts,
+                },
+            )
+            row = result.first()
+            instance_id = str(row[0]) if row else None
+
+        logger.info("instance_created", tenant_id=tenant_id,
+                     strategy=body.strategy_name, instance=body.instance_name)
+
+        # Publish config reload
+        nats_client = getattr(request.app.state, "nats", None)
+        if nats_client:
+            try:
+                await nats_client.publish(
+                    f"worker.config_reload.{tenant_id}",
+                    json.dumps({"tenant_id": tenant_id, "event": "INSTANCE_CREATED"}).encode(),
+                )
+            except Exception:
+                pass
+
+        return {"success": True, "data": {"instance_id": instance_id}}
+
+    except Exception as exc:
+        logger.error("instance_create_failed", tenant_id=tenant_id, error=str(exc))
+        return _error("INTERNAL", f"Failed to create instance: {exc}", 500)
+
+
+@router.patch("/instances/{instance_id}")
+async def update_instance(request: Request, instance_id: str):
+    """Update an existing strategy instance."""
+    tenant_id = request.state.tenant_id
+
+    body_bytes = await request.body()
+    body = InstanceUpdateBody.model_validate_json(body_bytes)
+
+    try:
+        async with rls_session(tenant_id) as session:
+            # Build dynamic SET clause
+            updates = []
+            bind_params: dict = {"tenant_id": tenant_id, "instance_id": instance_id}
+
+            if body.instance_name is not None:
+                updates.append("instance_name = :instance_name")
+                bind_params["instance_name"] = body.instance_name
+
+            if body.enabled is not None:
+                updates.append("enabled = :enabled")
+                bind_params["enabled"] = body.enabled
+
+            if body.session is not None:
+                updates.append("session = :session")
+                bind_params["session"] = body.session
+
+            if body.mode is not None:
+                updates.append("trading_mode = :mode")
+                bind_params["mode"] = body.mode
+
+            if body.max_daily_loss_pts is not None:
+                updates.append("max_daily_loss_pts = :max_daily_loss")
+                bind_params["max_daily_loss"] = body.max_daily_loss_pts
+
+            # Handle params merge (instruments + bias_config stored inside params JSONB)
+            if body.params is not None or body.instruments is not None or body.bias_config is not None:
+                merged = body.params or {}
+                if body.instruments is not None:
+                    merged["instruments"] = body.instruments
+                if body.bias_config is not None:
+                    merged["bias_config"] = body.bias_config
+                updates.append("params = COALESCE(params, '{}'::jsonb) || CAST(:params AS jsonb)")
+                bind_params["params"] = json.dumps(merged)
+
+            if updates:
+                updates.append("updated_at = NOW()")
+                set_clause = ", ".join(updates)
+                await session.execute(
+                    text(f"""
+                        UPDATE user_strategy_configs
+                        SET {set_clause}
+                        WHERE tenant_id = :tenant_id AND id = CAST(:instance_id AS uuid)
+                    """),
+                    bind_params,
+                )
+
+        logger.info("instance_updated", tenant_id=tenant_id, instance_id=instance_id)
+
+        # Publish config reload
+        nats_client = getattr(request.app.state, "nats", None)
+        if nats_client:
+            try:
+                await nats_client.publish(
+                    f"worker.config_reload.{tenant_id}",
+                    json.dumps({"tenant_id": tenant_id, "event": "INSTANCE_UPDATED"}).encode(),
+                )
+            except Exception:
+                pass
+
+        return {"success": True}
+
+    except Exception as exc:
+        logger.error("instance_update_failed", tenant_id=tenant_id, error=str(exc))
+        return _error("INTERNAL", f"Failed to update instance: {exc}", 500)
+
+
+@router.delete("/instances/{instance_id}")
+async def delete_instance(request: Request, instance_id: str):
+    """Delete a strategy instance."""
+    tenant_id = request.state.tenant_id
+
+    try:
+        async with rls_session(tenant_id) as session:
+            await session.execute(
+                text("""
+                    DELETE FROM user_strategy_configs
+                    WHERE tenant_id = :tenant_id AND id = CAST(:instance_id AS uuid)
+                """),
+                {"tenant_id": tenant_id, "instance_id": instance_id},
+            )
+
+        logger.info("instance_deleted", tenant_id=tenant_id, instance_id=instance_id)
+
+        nats_client = getattr(request.app.state, "nats", None)
+        if nats_client:
+            try:
+                await nats_client.publish(
+                    f"worker.config_reload.{tenant_id}",
+                    json.dumps({"tenant_id": tenant_id, "event": "INSTANCE_DELETED"}).encode(),
+                )
+            except Exception:
+                pass
+
+        return {"success": True}
+
+    except Exception as exc:
+        logger.error("instance_delete_failed", tenant_id=tenant_id, error=str(exc))
+        return _error("INTERNAL", f"Failed to delete instance: {exc}", 500)
+
+
+@router.post("/deploy")
+async def deploy_to_instance(request: Request):
+    """Deploy a backtest configuration as a new strategy instance (paper or live)."""
+    tenant_id = request.state.tenant_id
+
+    body_bytes = await request.body()
+    body = InstanceCreateBody.model_validate_json(body_bytes)
+
+    # Default to paper mode for safety
+    if body.mode not in ("paper", "live"):
+        body.mode = "paper"
+
+    merged_params = dict(body.params)
+    if body.instruments:
+        merged_params["instruments"] = body.instruments
+        await _ensure_feed_subscriptions(request, body.instruments)
+    if body.bias_config is not None:
+        merged_params["bias_config"] = body.bias_config
+
+    try:
+        async with rls_session(tenant_id) as session:
+            result = await session.execute(
+                text("""
+                    INSERT INTO user_strategy_configs
+                        (tenant_id, strategy_name, instance_name, enabled, params,
+                         trading_mode, session, max_daily_loss_pts, updated_at)
+                    VALUES
+                        (:tenant_id, :strategy_name, :instance_name, TRUE,
+                         CAST(:params AS jsonb), :mode, :session, :max_daily_loss, NOW())
+                    RETURNING id
+                """),
+                {
+                    "tenant_id": tenant_id,
+                    "strategy_name": body.strategy_name,
+                    "instance_name": body.instance_name,
+                    "params": json.dumps(merged_params),
+                    "mode": body.mode,
+                    "session": body.session,
+                    "max_daily_loss": body.max_daily_loss_pts,
+                },
+            )
+            row = result.first()
+            instance_id = str(row[0]) if row else None
+
+        logger.info("instance_deployed", tenant_id=tenant_id,
+                     strategy=body.strategy_name, instance=body.instance_name, mode=body.mode)
+
+        nats_client = getattr(request.app.state, "nats", None)
+        if nats_client:
+            try:
+                await nats_client.publish(
+                    f"worker.config_reload.{tenant_id}",
+                    json.dumps({"tenant_id": tenant_id, "event": "INSTANCE_DEPLOYED"}).encode(),
+                )
+            except Exception:
+                pass
+
+        return {
+            "success": True,
+            "data": {
+                "instance_id": instance_id,
+                "instance_name": body.instance_name,
+                "mode": body.mode,
+            },
+        }
+
+    except Exception as exc:
+        logger.error("deploy_failed", tenant_id=tenant_id, error=str(exc))
+        return _error("INTERNAL", f"Failed to deploy instance: {exc}", 500)
 
 
 @router.get("/{strategy_id}/config")

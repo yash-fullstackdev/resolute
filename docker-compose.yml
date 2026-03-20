@@ -234,6 +234,8 @@ services:
       ADMIN_JWT_SECRET: ${ADMIN_JWT_SECRET}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       BACKTEST_DATA_PATH: /data  # Path inside container to OHLCV data
+      FEED_ACCESS_TOKEN: ${FEED_ACCESS_TOKEN}
+      FEED_CLIENT_ID: ${FEED_CLIENT_ID}
     depends_on:
       nats:
         condition: service_healthy

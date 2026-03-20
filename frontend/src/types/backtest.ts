@@ -42,6 +42,10 @@ export interface StrategySlot {
   time_stop_bars: number;
   params: Record<string, number>;
   bias_config?: BiasConfig;
+  sl_atr_mult?: number;
+  tp_atr_mult?: number;
+  max_hold_bars?: number;
+  slippage_pts?: number;
 }
 
 export interface ExitConfig {
@@ -156,15 +160,66 @@ export interface DailyPnlPoint {
   pnl: number;
 }
 
+export interface StrategyBiasStats {
+  active: boolean;
+  filters?: BiasFilter[];
+  min_agreement?: number;
+  buy_bars?: number;
+  sell_bars?: number;
+  neutral_bars?: number;
+  total_bars?: number;
+  buy_pct?: number;
+  sell_pct?: number;
+}
+
+export interface SlotConfig {
+  strategy_name: string;
+  params: Record<string, number>;
+  bias_config?: BiasConfig;
+  session: string;
+  max_fires_per_day: number;
+  time_stop_bars: number;
+}
+
+export interface OptimizeResult {
+  strategy_name: string;
+  instrument: string;
+  optimize_for: string;
+  total_combinations: number;
+  best: {
+    params: Record<string, number>;
+    total_trades: number;
+    win_rate: number;
+    profit_factor: number;
+    sharpe: number;
+    total_pnl: number;
+    max_drawdown: number;
+    score: number;
+  } | null;
+  results: Array<{
+    params: Record<string, number>;
+    total_trades: number;
+    win_rate: number;
+    profit_factor: number;
+    sharpe: number;
+    total_pnl: number;
+    max_drawdown: number;
+    score: number;
+  }>;
+}
+
 export interface BacktestResult {
   metrics: BacktestMetrics;
   per_strategy_metrics: Record<string, BacktestMetrics>;
+  per_strategy_bias?: Record<string, StrategyBiasStats>;
   equity_curve: EquityPoint[];
   per_strategy_equity: Record<string, EquityPoint[]>;
   trades: TradeRecord[];
   monthly_pnl: MonthlyPnlPoint[];
   daily_pnl: DailyPnlPoint[];
   strategy_names: string[];
+  slot_configs?: SlotConfig[];
+  instrument?: string;
   initial_capital: number;
   start_ts: number;
   end_ts: number;

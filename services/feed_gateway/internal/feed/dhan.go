@@ -35,6 +35,7 @@ var dhanSecurityIDs = map[string]dhanInstrument{
 	"BANKNIFTY":     {25, "IDX_I"},
 	"FINNIFTY":      {27, "IDX_I"},
 	"MIDCPNIFTY":    {442, "IDX_I"},
+	"SENSEX":        {51, "IDX_I"},
 	"NSE:RELIANCE":  {2885, "NSE_EQ"},
 	"NSE:HDFCBANK":  {1333, "NSE_EQ"},
 	"NSE:INFY":      {1594, "NSE_EQ"},

@@ -25,6 +25,27 @@ export interface StrategyBiasConfig {
   mode: "bias_filtered" | "independent";
 }
 
+export interface InstanceExitConfig {
+  sl_atr_mult: number;
+  tp_atr_mult: number;
+  max_hold_bars: number;
+  slippage_pts: number;
+}
+
+export interface StrategyInstance {
+  instance_id: string;
+  instance_name: string;
+  enabled: boolean;
+  mode: "live" | "paper" | "disabled";
+  session: "morning" | "afternoon" | "all";
+  max_daily_loss_pts: number | null;
+  instruments: string[];
+  params: Record<string, number | string>;
+  bias_config?: StrategyBiasConfig;
+  exit_config?: InstanceExitConfig;
+  updated_at?: string;
+}
+
 export interface Strategy {
   id: string;
   name: string;
@@ -34,6 +55,7 @@ export interface Strategy {
   min_capital_tier: CapitalTier;
   enabled: boolean;
   params: StrategyParam[];
+  instances: StrategyInstance[];
   instruments?: string[];
   bias_config?: StrategyBiasConfig;
   win_rate?: number;

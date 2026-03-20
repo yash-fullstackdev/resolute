@@ -339,3 +339,73 @@ def _get_registry() -> dict:
             break
     from services.user_worker_pool.strategies import STRATEGY_REGISTRY
     return STRATEGY_REGISTRY
+
+
+# ── Optimizer endpoint ────────────────────────────────────────────────────────
+
+class OptimizeRequest(BaseModel):
+    instrument: str = "NIFTY_50"
+    start_date: str
+    end_date: str
+    strategy_name: str
+    bias_config: dict[str, Any] | None = None
+    exit_config: ExitConfig = Field(default_factory=ExitConfig)
+    param_grid: dict[str, list] = Field(default_factory=dict)
+    optimize_for: str = "profit_factor"
+    session: str = "all"
+    test_bias_on_off: bool = False  # if True, tests each combo with AND without bias
+
+
+@router.post("/optimize")
+async def run_optimization(request: Request, body: OptimizeRequest):
+    """Run parameter grid optimization — tests all param combinations."""
+    tenant_id = getattr(request.state, "tenant_id", "unknown")
+
+    if not body.param_grid:
+        return _error("VALIDATION_ERROR", "param_grid is required", 400)
+
+    logger.info("backtest.optimize.start", tenant_id=tenant_id,
+                instrument=body.instrument, strategy=body.strategy_name,
+                grid_size=_grid_size(body.param_grid))
+
+    try:
+        result = await asyncio.get_event_loop().run_in_executor(
+            _executor, _run_optimize_sync, body
+        )
+    except Exception as e:
+        import traceback
+        logger.error("backtest.optimize.error", error=str(e), traceback=traceback.format_exc())
+        return _error("ENGINE_ERROR", f"Optimization failed: {e}", 500)
+
+    return JSONResponse(content=result)
+
+
+def _grid_size(param_grid: dict) -> int:
+    size = 1
+    for values in param_grid.values():
+        size *= len(values)
+    return size
+
+
+def _run_optimize_sync(body: OptimizeRequest) -> dict:
+    """Run fast grid optimization — loads data once, varies only params."""
+    for root in [Path("/app"), Path(__file__).parent.parent.parent.parent]:
+        if (root / "backtest").exists() and str(root) not in sys.path:
+            sys.path.insert(0, str(root))
+            break
+
+    from backtest.optimizer import run_optimization
+
+    return run_optimization({
+        "instrument": body.instrument,
+        "start_date": body.start_date,
+        "end_date": body.end_date,
+        "data_dir": str(_get_data_dir()),
+        "strategy_name": body.strategy_name,
+        "param_grid": body.param_grid,
+        "exit_config": body.exit_config.model_dump(),
+        "bias_config": body.bias_config or {},
+        "optimize_for": body.optimize_for,
+        "session": body.session,
+        "test_bias_on_off": body.test_bias_on_off,
+    })

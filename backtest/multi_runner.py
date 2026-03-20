@@ -798,6 +798,47 @@ def run(config: dict) -> dict:
     strategy_names = list({s["name"] for s in slots})
     per_strat_trades = {name: [t for t in all_trades if t["strategy_name"] == name] for name in strategy_names}
 
+    # Per-strategy bias stats
+    per_strategy_bias: dict[str, dict] = {}
+    for slot in slots:
+        s_name = slot["name"]
+        bias_list = strategy_bias_caches.get(s_name, [])
+        s_bias_cfg = slot.get("bias_config") or bias_cfg
+        is_filtered = s_bias_cfg.get("mode") == "bias_filtered" or slot.get("mode") == "bias_filtered"
+
+        if bias_list and is_filtered:
+            buy_count = sum(1 for b in bias_list if b == "BUY")
+            sell_count = sum(1 for b in bias_list if b == "SELL")
+            none_count = sum(1 for b in bias_list if b is None)
+            total = len(bias_list)
+            per_strategy_bias[s_name] = {
+                "active": True,
+                "filters": s_bias_cfg.get("bias_filters", []),
+                "min_agreement": s_bias_cfg.get("min_agreement", 2),
+                "buy_bars": buy_count,
+                "sell_bars": sell_count,
+                "neutral_bars": none_count,
+                "total_bars": total,
+                "buy_pct": round(buy_count / max(total, 1) * 100, 1),
+                "sell_pct": round(sell_count / max(total, 1) * 100, 1),
+            }
+        else:
+            per_strategy_bias[s_name] = {"active": False}
+
+    # Slot configs (for deploy button — frontend needs the full config)
+    slot_configs = []
+    for s in slots:
+        slot_configs.append({
+            "strategy_name": s["name"],
+            "effective_name": s["name"],
+            "capital_allocation": 100_000,
+            "params": s.get("params", {}),
+            "bias_config": s.get("bias_config"),
+            "session": s.get("session", "all"),
+            "max_fires_per_day": s.get("max_fires_per_day", 5),
+            "time_stop_bars": s.get("time_stop_bars", 20),
+        })
+
     from .reporting import build_full_result
     raw = {
         "trades": all_trades, "equity_curve": equity_snapshots,
@@ -807,11 +848,12 @@ def run(config: dict) -> dict:
         "end_ts": float(timestamps[-1]) if len(timestamps) > 0 else 0,
         "initial_capital": 500_000,
     }
-    cfg_dict = {"strategies": [
-        {"strategy_name": s["name"], "effective_name": s["name"], "capital_allocation": 100_000}
-        for s in slots
-    ]}
-    return build_full_result(raw, cfg_dict)
+    cfg_dict = {"strategies": slot_configs}
+    result = build_full_result(raw, cfg_dict)
+    result["per_strategy_bias"] = per_strategy_bias
+    result["slot_configs"] = slot_configs
+    result["instrument"] = instrument
+    return result
 
 
 # ── Inline helpers ────────────────────────────────────────────────────────────

@@ -119,6 +119,20 @@ DEFAULT_STRATEGY_CONFIG: dict[str, dict[str, Any]] = {
 
 
 @dataclass
+class InstanceConfig:
+    """Configuration for a single strategy instance."""
+    instance_id: str
+    instance_name: str
+    strategy_name: str
+    mode: str = "disabled"        # "live" | "paper" | "disabled"
+    session: str = "all"          # "morning" | "afternoon" | "all"
+    max_daily_loss_pts: float | None = None
+    instruments: list[str] = field(default_factory=list)
+    params: dict[str, Any] = field(default_factory=dict)
+    bias_config: dict[str, Any] | None = None
+
+
+@dataclass
 class UserStrategyConfig:
     """Per-user strategy configuration."""
     tenant_id: str
@@ -126,6 +140,7 @@ class UserStrategyConfig:
     strategies: dict[str, dict[str, Any]] = field(default_factory=dict)
     enabled_strategy_names: list[str] = field(default_factory=list)
     strategy_instruments: dict[str, list[str]] = field(default_factory=dict)
+    instances: list[InstanceConfig] = field(default_factory=list)
 
     def get_strategy_config(self, strategy_name: str) -> dict[str, Any]:
         """Get merged config for a specific strategy."""
@@ -133,6 +148,14 @@ class UserStrategyConfig:
         overrides = self.strategies.get(strategy_name, {})
         merged = {**defaults, **overrides}
         return merged
+
+    def get_instance_config(self, instance_id: str) -> dict[str, Any]:
+        """Get merged config for a specific instance."""
+        for inst in self.instances:
+            if inst.instance_id == instance_id:
+                defaults = DEFAULT_STRATEGY_CONFIG.get(inst.strategy_name, {})
+                return {**defaults, **inst.params}
+        return {}
 
     def get_strategy_instruments(self, strategy_name: str) -> list[str]:
         """Get instruments this strategy should monitor (empty = all)."""
@@ -165,12 +188,14 @@ class UserConfigLoader:
             try:
                 import json as _json
 
-                # Load strategy configs (params column, not config_json)
+                # Load ALL instance rows (multiple per strategy allowed)
                 rows = await self._db.fetch(
                     """
-                    SELECT strategy_name, params, enabled, portfolio_value_inr
+                    SELECT id, strategy_name, instance_name, params, enabled,
+                           portfolio_value_inr, trading_mode, session, max_daily_loss_pts
                     FROM user_strategy_configs
                     WHERE tenant_id = $1
+                    ORDER BY strategy_name, updated_at
                     """,
                     tenant_id,
                     tenant_id=tenant_id,
@@ -189,20 +214,46 @@ class UserConfigLoader:
                     except (ValueError, TypeError):
                         user_overrides = {}
 
-                    # Extract instruments (stored inside params JSONB)
+                    # Extract instruments and bias_config from params JSONB
                     instruments = user_overrides.pop("instruments", [])
-                    if isinstance(instruments, list):
+                    if not isinstance(instruments, list):
+                        instruments = []
+                    bias_config = user_overrides.pop("bias_config", None)
+
+                    # Backward compat: populate strategy_instruments for old code paths
+                    if instruments:
                         config.strategy_instruments[strategy_name] = instruments
 
-                    # Take portfolio_value_inr from any strategy row (they share same value)
+                    # Portfolio value from any row
                     if row["portfolio_value_inr"]:
                         config.portfolio_value_inr = float(row["portfolio_value_inr"])
 
-                    user_overrides["enabled"] = row["enabled"]
-                    config.strategies[strategy_name] = user_overrides
+                    # Backward compat: populate strategies dict (first instance wins)
+                    if strategy_name not in config.strategies:
+                        user_overrides["enabled"] = row["enabled"]
+                        config.strategies[strategy_name] = user_overrides
 
                     if row["enabled"]:
-                        config.enabled_strategy_names.append(strategy_name)
+                        if strategy_name not in config.enabled_strategy_names:
+                            config.enabled_strategy_names.append(strategy_name)
+
+                    # Build instance config
+                    mode = row.get("trading_mode", "disabled") or "disabled"
+                    if mode == "disabled" and row["enabled"]:
+                        mode = "paper"  # backward compat: enabled=True but no trading_mode
+
+                    inst = InstanceConfig(
+                        instance_id=str(row["id"]),
+                        instance_name=row.get("instance_name") or strategy_name,
+                        strategy_name=strategy_name,
+                        mode=mode,
+                        session=row.get("session") or "all",
+                        max_daily_loss_pts=row.get("max_daily_loss_pts"),
+                        instruments=instruments,
+                        params=user_overrides,
+                        bias_config=bias_config if isinstance(bias_config, dict) else None,
+                    )
+                    config.instances.append(inst)
 
             except Exception as exc:
                 logger.warning(

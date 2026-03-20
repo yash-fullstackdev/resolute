@@ -6,38 +6,106 @@ import { MetricsGrid } from "@/components/backtest/MetricsGrid";
 import { EquityCurveChart } from "@/components/backtest/EquityCurveChart";
 import { MonthlyHeatmap } from "@/components/backtest/MonthlyHeatmap";
 import { TradeLog } from "@/components/backtest/TradeLog";
+import { OptimizerPanel } from "@/components/backtest/OptimizerPanel";
 import type { MultiBacktestRequest, BacktestResult } from "@/types/backtest";
 import { apiClient } from "@/lib/api";
-import { AlertCircle, TrendingUp, BarChart2, Calendar, List, Layers } from "lucide-react";
+import { INDICATOR_TYPES } from "@/lib/bias-indicators";
+import { AlertCircle, TrendingUp, BarChart2, Calendar, List, Layers, Shield, Rocket, Check, Zap } from "lucide-react";
 
 type ResultTab = "overview" | "equity" | "heatmap" | "trades" | "strategies";
 
 function StrategyBreakdown({ result }: { result: BacktestResult }) {
   const strategyNames = Object.keys(result.per_strategy_metrics ?? {});
+  const [deployed, setDeployed] = useState<Record<string, boolean>>({});
+
   if (strategyNames.length === 0) return null;
+
+  const handleDeploy = async (name: string) => {
+    const slot = result.slot_configs?.find((s) => s.strategy_name === name);
+    if (!slot) return;
+    try {
+      await apiClient.post("/strategies/deploy", {
+        strategy_name: name,
+        instance_name: `${name.replace(/_/g, " ")} — backtest deploy`,
+        instruments: result.instrument ? [result.instrument] : [],
+        params: slot.params,
+        bias_config: slot.bias_config,
+        session: slot.session,
+        mode: "paper",
+      });
+      setDeployed((p) => ({ ...p, [name]: true }));
+    } catch { /* ignore */ }
+  };
 
   return (
     <div className="space-y-4">
       {strategyNames.map((name) => {
         const m = result.per_strategy_metrics[name];
         if (!m) return null;
-        const equity = result.per_strategy_equity?.[name] ?? [];
+        const bias = result.per_strategy_bias?.[name];
         const returnColor = m.total_return_pct >= 0 ? "text-profit" : "text-loss";
         const rows = [
           { label: "Total Return", value: `${m.total_return_pct >= 0 ? "+" : ""}${m.total_return_pct.toFixed(2)}%`, color: returnColor },
-          { label: "CAGR", value: `${m.cagr_pct.toFixed(2)}%`, color: m.cagr_pct >= 15 ? "text-profit" : "text-yellow-400" },
-          { label: "Max DD", value: `-${m.max_drawdown_pct.toFixed(2)}%`, color: m.max_drawdown_pct > 15 ? "text-loss" : "text-white" },
           { label: "Sharpe", value: m.sharpe_ratio.toFixed(3), color: m.sharpe_ratio >= 1.5 ? "text-profit" : "text-slate-400" },
           { label: "Win Rate", value: `${m.win_rate_pct.toFixed(1)}%`, color: m.win_rate_pct >= 55 ? "text-profit" : "text-yellow-400" },
           { label: "Trades", value: String(m.total_trades), color: "text-white" },
           { label: "Profit Factor", value: m.profit_factor >= 9999 ? "∞" : m.profit_factor.toFixed(2), color: m.profit_factor >= 1.5 ? "text-profit" : "text-yellow-400" },
+          { label: "Max DD", value: `-${m.max_drawdown_pct.toFixed(2)}%`, color: m.max_drawdown_pct > 15 ? "text-loss" : "text-white" },
           { label: "Net P&L", value: `${m.total_return_inr >= 0 ? "+" : ""}${m.total_return_inr.toFixed(1)} pts`, color: returnColor },
         ];
 
         return (
           <div key={name} className="rounded-xl border border-surface-border bg-surface-light/20 p-4">
-            <h4 className="mb-3 text-sm font-semibold text-white">{name.replace(/_/g, " ")}</h4>
-            <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 lg:grid-cols-8">
+            <div className="flex items-center justify-between mb-3">
+              <h4 className="text-sm font-semibold text-white">{name.replace(/_/g, " ")}</h4>
+              <button
+                onClick={() => handleDeploy(name)}
+                disabled={deployed[name]}
+                className={`flex items-center gap-1 rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors ${
+                  deployed[name]
+                    ? "bg-profit/20 text-profit"
+                    : "bg-accent hover:bg-accent-light text-white"
+                }`}
+              >
+                {deployed[name] ? <><Check className="h-3 w-3" /> Deployed</> : <><Rocket className="h-3 w-3" /> Deploy to Paper</>}
+              </button>
+            </div>
+
+            {/* Bias stats */}
+            {bias?.active && (
+              <div className="mb-3 rounded-lg border border-accent/20 bg-accent/5 p-3">
+                <div className="flex items-center gap-2 mb-2">
+                  <Shield className="h-3.5 w-3.5 text-accent-light" />
+                  <span className="text-[11px] font-semibold text-accent-light uppercase">Bias Filter Active</span>
+                  <span className="text-[10px] text-slate-500 ml-auto">
+                    min {bias.min_agreement} agree
+                  </span>
+                </div>
+                <div className="flex flex-wrap gap-1 mb-2">
+                  {bias.filters?.map((f, i) => (
+                    <span key={i} className="rounded bg-surface-dark px-2 py-0.5 text-[10px] text-slate-400">
+                      {INDICATOR_TYPES[f.type]?.label ?? f.type}@{f.timeframe}m
+                    </span>
+                  ))}
+                </div>
+                <div className="grid grid-cols-3 gap-2 text-center">
+                  <div>
+                    <p className="text-[10px] text-slate-500">BUY Bars</p>
+                    <p className="text-xs font-bold text-profit">{bias.buy_bars} ({bias.buy_pct}%)</p>
+                  </div>
+                  <div>
+                    <p className="text-[10px] text-slate-500">SELL Bars</p>
+                    <p className="text-xs font-bold text-loss">{bias.sell_bars} ({bias.sell_pct}%)</p>
+                  </div>
+                  <div>
+                    <p className="text-[10px] text-slate-500">Neutral</p>
+                    <p className="text-xs font-bold text-slate-400">{bias.neutral_bars}</p>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 lg:grid-cols-7">
               {rows.map((r) => (
                 <div key={r.label} className="rounded-lg border border-surface-border/50 bg-surface-dark p-3">
                   <p className="text-[10px] font-medium uppercase text-slate-500">{r.label}</p>
@@ -45,15 +113,6 @@ function StrategyBreakdown({ result }: { result: BacktestResult }) {
                 </div>
               ))}
             </div>
-
-            {equity.length > 0 && (
-              <div className="mt-3">
-                <EquityCurveChart
-                  equityCurve={equity}
-                                    height={180}
-                />
-              </div>
-            )}
           </div>
         );
       })}
@@ -61,7 +120,10 @@ function StrategyBreakdown({ result }: { result: BacktestResult }) {
   );
 }
 
+type PageMode = "backtest" | "optimizer";
+
 export default function BacktestPage() {
+  const [pageMode, setPageMode] = useState<PageMode>("backtest");
   const [isRunning, setIsRunning] = useState(false);
   const [result, setResult] = useState<BacktestResult | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -105,13 +167,33 @@ export default function BacktestPage() {
 
   return (
     <div className="space-y-5">
-      <div>
-        <h1 className="text-xl font-bold text-white">Backtesting</h1>
-        <p className="text-sm text-slate-400">
-          Test strategies against historical data (2021–2026, 1-min OHLCV)
-        </p>
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-xl font-bold text-white">Backtesting</h1>
+          <p className="text-sm text-slate-400">
+            Test strategies against historical data
+          </p>
+        </div>
+        <div className="flex gap-1 rounded-lg border border-surface-border p-1">
+          <button onClick={() => setPageMode("backtest")}
+            className={`flex items-center gap-1.5 rounded-md px-4 py-1.5 text-sm font-medium transition-colors ${
+              pageMode === "backtest" ? "bg-accent text-white" : "text-slate-400 hover:text-white"
+            }`}>
+            <BarChart2 className="h-3.5 w-3.5" /> Backtest
+          </button>
+          <button onClick={() => setPageMode("optimizer")}
+            className={`flex items-center gap-1.5 rounded-md px-4 py-1.5 text-sm font-medium transition-colors ${
+              pageMode === "optimizer" ? "bg-accent text-white" : "text-slate-400 hover:text-white"
+            }`}>
+            <Zap className="h-3.5 w-3.5" /> Optimizer
+          </button>
+        </div>
       </div>
 
+      {pageMode === "optimizer" ? (
+        <OptimizerPanel />
+      ) : (
+      <>
       {/* Config Panel */}
       <BacktestConfigPanel onRun={handleRun} isRunning={isRunning} />
 
@@ -260,6 +342,8 @@ export default function BacktestPage() {
             Configure strategies above and click Run Backtest
           </p>
         </div>
+      )}
+      </>
       )}
     </div>
   );

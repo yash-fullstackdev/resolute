@@ -60,6 +60,20 @@ export interface SignalLeg {
   lots: number;
 }
 
+export interface SignalOptionsOverlay {
+  strike: number;
+  option_type: "CE" | "PE";
+  ltp: number;
+  sl: number;
+  tp: number;
+  delta: number;
+  iv: number | null;
+  risk: number;
+  reward: number;
+  rr: string;
+  expiry: string | null;
+}
+
 export interface Signal {
   id: string;
   strategy_name: string;
@@ -68,15 +82,22 @@ export interface Signal {
   strength: number;
   regime: MarketRegime;
   legs: SignalLeg[];
-  /** "OPTIONS" = option leg signal | "DIRECT" = price signal on underlying */
   signal_type: "OPTIONS" | "DIRECT";
-  /** Populated for DIRECT signals */
   entry_price: number | null;
   stop_loss_price: number | null;
   target_price: number | null;
+  index_risk_pts?: number;
+  index_reward_pts?: number;
+  index_rr?: string;
+  has_options_chain?: boolean;
+  options?: SignalOptionsOverlay;
   rationale: string;
+  current_price?: number | null;
+  live_pnl?: number | null;
+  trade_status?: string;
   created_at: string;
   executed: boolean;
+  metadata?: Record<string, unknown>;
 }
 
 export type OrderStatus = "PENDING" | "PLACED" | "FILLED" | "PARTIALLY_FILLED" | "CANCELLED" | "REJECTED" | "ERROR";
