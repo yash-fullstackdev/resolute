@@ -287,6 +287,9 @@ async def list_strategies(request: Request):
         ("rsi_vwap_scalp", "RSI VWAP Scalp", "TECHNICAL", "STARTER", "Mean-reversion scalp at VWAP bands — buys RSI oversold at lower band, sells overbought at upper band"),
         ("ema33_ob", "EMA 33 Pullback", "TECHNICAL", "STARTER", "33 EMA pullback-rejection with RSI zone filter and VWAP confirmation — catches trend continuations"),
         ("smc_order_block", "SMC Order Block", "TECHNICAL", "STARTER", "Smart Money Concepts — enters at institutional Order Blocks after Break of Structure with FVG and sweep confluence"),
+        ("brahmaastra", "Brahmaastra", "BUYING", "STARTER", "9:15–10:15 AM first-hour strategy: Opening Range Breakout + PDH/PDL trap formation with wick rejection — 50% partial book at 1:1, kill switch at 10:30"),
+        ("ema5_mean_reversion", "5 EMA Mean Reversion", "BUYING", "STARTER", "Counter-trend option buying on 5 EMA exhaustion — buys CE/PE when price floats far from 5 EMA and snaps back, 1:3 RR with 3-loss daily circuit breaker"),
+        ("parent_child_momentum", "Parent-Child Momentum", "BUYING", "STARTER", "1H parent (EMA 10/30/100 + MACD) gates direction, 5m child MACD crossover triggers entry — 10:00–14:30 window, OTM strikes, structural swing SL"),
     ]
 
     # Configurable params for technical strategies (shown on UI)
@@ -337,6 +340,33 @@ async def list_strategies(request: Request):
             {"name": "ob_length", "type": "number", "default_value": 6, "current_value": 6, "description": "Swing pivot lookback bars", "min": 3, "max": 20},
             {"name": "fvg_threshold", "type": "number", "default_value": 0.0005, "current_value": 0.0005, "description": "Min FVG gap size (decimal)", "min": 0.0001, "max": 0.005},
             {"name": "max_sl_points", "type": "number", "default_value": 20, "current_value": 20, "description": "Max stop loss in index points", "min": 1, "max": 200},
+        ],
+        "brahmaastra": [
+            {"name": "gap_threshold_pct", "type": "number", "default_value": 0.4, "current_value": 0.4, "description": "Min gap % from prev close to qualify", "min": 0.1, "max": 2.0},
+            {"name": "wick_ratio_min", "type": "number", "default_value": 1.5, "current_value": 1.5, "description": "Min wick-to-body ratio for trap candles", "min": 0.5, "max": 5.0},
+            {"name": "partial_book_pct", "type": "number", "default_value": 50, "current_value": 50, "description": "% of position to book at 1:1 RR", "min": 0, "max": 100},
+            {"name": "partial_book_rr", "type": "number", "default_value": 1.0, "current_value": 1.0, "description": "RR ratio for partial booking", "min": 0.5, "max": 2.0},
+            {"name": "final_target_rr", "type": "number", "default_value": 1.5, "current_value": 1.5, "description": "Final target RR for remaining position", "min": 1.0, "max": 5.0},
+            {"name": "strike_selection", "type": "select", "default_value": "ATM", "current_value": "ATM", "description": "Strike to buy", "options": ["ATM", "ITM"]},
+        ],
+        "ema5_mean_reversion": [
+            {"name": "ema_period", "type": "number", "default_value": 5, "current_value": 5, "description": "EMA period", "min": 3, "max": 20},
+            {"name": "min_distance_ema_pct", "type": "number", "default_value": 0.002, "current_value": 0.002, "description": "Min distance from EMA to qualify (decimal)", "min": 0.0005, "max": 0.01},
+            {"name": "rr_min", "type": "number", "default_value": 3.0, "current_value": 3.0, "description": "Minimum reward:risk ratio", "min": 1.5, "max": 5.0},
+            {"name": "daily_loss_limit", "type": "number", "default_value": 3, "current_value": 3, "description": "Max SL hits per day before halting", "min": 1, "max": 5},
+            {"name": "min_india_vix", "type": "number", "default_value": 12.0, "current_value": 12.0, "description": "Min VIX to trade (below = skip)", "min": 8.0, "max": 20.0},
+            {"name": "max_india_vix", "type": "number", "default_value": 35.0, "current_value": 35.0, "description": "Max VIX to trade (above = skip)", "min": 20.0, "max": 60.0},
+            {"name": "strike_selection", "type": "select", "default_value": "ATM", "current_value": "ATM", "description": "Strike to buy", "options": ["ATM", "ITM"]},
+        ],
+        "parent_child_momentum": [
+            {"name": "ema_short", "type": "number", "default_value": 10, "current_value": 10, "description": "Fast EMA period (1H parent)", "min": 3, "max": 30},
+            {"name": "ema_mid", "type": "number", "default_value": 30, "current_value": 30, "description": "Mid EMA period (1H parent)", "min": 10, "max": 60},
+            {"name": "ema_long", "type": "number", "default_value": 100, "current_value": 100, "description": "Slow EMA period (1H parent)", "min": 50, "max": 200},
+            {"name": "macd_fast", "type": "number", "default_value": 48, "current_value": 48, "description": "MACD fast period (1H parent)", "min": 12, "max": 100},
+            {"name": "macd_slow", "type": "number", "default_value": 104, "current_value": 104, "description": "MACD slow period (1H parent)", "min": 26, "max": 200},
+            {"name": "macd_signal", "type": "number", "default_value": 36, "current_value": 36, "description": "MACD signal period (1H parent)", "min": 9, "max": 72},
+            {"name": "strike_selection", "type": "select", "default_value": "1_OTM", "current_value": "1_OTM", "description": "Strike to buy", "options": ["ATM", "1_OTM", "2_OTM"]},
+            {"name": "profit_target_pct", "type": "number", "default_value": 25, "current_value": 25, "description": "Premium profit target %", "min": 10, "max": 100},
         ],
     }
 
@@ -544,6 +574,7 @@ class InstanceCreateBody(BaseModel):
     instruments: list[str] = Field(default_factory=list)
     params: dict = Field(default_factory=dict)
     bias_config: dict | None = None
+    exit_config: dict | None = None
     session: str = "all"
     mode: str = "paper"
     max_daily_loss_pts: float | None = None
@@ -571,6 +602,8 @@ async def create_instance(request: Request, body: InstanceCreateBody):
         await _ensure_feed_subscriptions(request, body.instruments)
     if body.bias_config is not None:
         merged_params["bias_config"] = body.bias_config
+    if body.exit_config is not None:
+        merged_params["exit_config"] = body.exit_config
 
     try:
         async with rls_session(tenant_id) as session:
@@ -747,6 +780,8 @@ async def deploy_to_instance(request: Request):
         await _ensure_feed_subscriptions(request, body.instruments)
     if body.bias_config is not None:
         merged_params["bias_config"] = body.bias_config
+    if body.exit_config is not None:
+        merged_params["exit_config"] = body.exit_config
 
     try:
         async with rls_session(tenant_id) as session:

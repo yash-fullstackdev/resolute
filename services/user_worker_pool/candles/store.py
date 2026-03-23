@@ -2,13 +2,20 @@
 
 On startup:
   1. Fetch today's historical 1m candles from Dhan REST API
-  2. Build 5m candles from 1m data
+  2. Build 5m, 15m, 1H candles from 1m data
   3. Subscribe to NATS ticks for real-time updates
 
 On each tick:
   1. Update current 1m candle (OHLCV)
-  2. When 1m closes, aggregate into 5m
-  3. Strategies always have full candle history from market open
+  2. When 1m closes, aggregate into 5m, 15m, 1H
+  3. Track PDH/PDL (Previous Day High/Low) per symbol
+  4. Strategies always have full candle history from market open
+
+Timeframes supported: 1m, 5m, 15m, 1H
+Required by:
+  - 15m: Brahmaastra (ORB range), 5 EMA (CE signal)
+  - 1H:  Parent-Child Momentum (parent timeframe)
+  - PDH/PDL: Brahmaastra (trap formation levels)
 
 No mock data. No synthetic values. Real market data only.
 """
@@ -61,8 +68,13 @@ DHAN_EXCHANGE_MAP = {
 }
 
 # Max candles to keep in memory per symbol
-MAX_1M_BARS = 500
-MAX_5M_BARS = 200
+# EMA100 on 1H (Parent-Child) needs 100+ 1H bars = ~16 trading days.
+# EMA33 on 5m needs 33 bars = trivial. EMA5 on 15m also trivial.
+# Set limits to hold enough history for all strategy indicators.
+MAX_1M_BARS  = 800   # ~13 hrs (~2 trading days)
+MAX_5M_BARS  = 500   # ~41 hrs (~7 trading days) — enough for all 5m EMAs
+MAX_15M_BARS = 200   # ~50 hrs (~8 trading days)
+MAX_1H_BARS  = 160   # ~160 hrs (~26 trading days) — covers EMA100 on 1H
 
 
 class CandleBuffer:
@@ -117,42 +129,105 @@ class CandleBuffer:
 
 
 class SymbolCandles:
-    """Manages 1m + 5m candle buffers for a single symbol."""
+    """Manages 1m, 5m, 15m, and 1H candle buffers for a single symbol.
+
+    Also tracks PDH/PDL (Previous Day High/Low) for trap-formation strategies.
+    """
 
     def __init__(self):
-        self.candles_1m = CandleBuffer(max_bars=MAX_1M_BARS)
-        self.candles_5m = CandleBuffer(max_bars=MAX_5M_BARS)
-        # Current forming candle
+        self.candles_1m  = CandleBuffer(max_bars=MAX_1M_BARS)
+        self.candles_5m  = CandleBuffer(max_bars=MAX_5M_BARS)
+        self.candles_15m = CandleBuffer(max_bars=MAX_15M_BARS)
+        self.candles_1h  = CandleBuffer(max_bars=MAX_1H_BARS)
+
+        # Current forming 1m candle
         self._cur_1m_ts: float = 0
-        self._cur_1m_o: float = 0
-        self._cur_1m_h: float = 0
-        self._cur_1m_l: float = 0
-        self._cur_1m_c: float = 0
-        self._cur_1m_v: float = 0
+        self._cur_1m_o:  float = 0
+        self._cur_1m_h:  float = 0
+        self._cur_1m_l:  float = 0
+        self._cur_1m_c:  float = 0
+        self._cur_1m_v:  float = 0
+
         # Current forming 5m candle
         self._cur_5m_ts: float = 0
-        self._cur_5m_o: float = 0
-        self._cur_5m_h: float = 0
-        self._cur_5m_l: float = 0
-        self._cur_5m_c: float = 0
-        self._cur_5m_v: float = 0
+        self._cur_5m_o:  float = 0
+        self._cur_5m_h:  float = 0
+        self._cur_5m_l:  float = 0
+        self._cur_5m_c:  float = 0
+        self._cur_5m_v:  float = 0
+
+        # Current forming 15m candle
+        self._cur_15m_ts: float = 0
+        self._cur_15m_o:  float = 0
+        self._cur_15m_h:  float = 0
+        self._cur_15m_l:  float = 0
+        self._cur_15m_c:  float = 0
+        self._cur_15m_v:  float = 0
+
+        # Current forming 1H candle
+        self._cur_1h_ts: float = 0
+        self._cur_1h_o:  float = 0
+        self._cur_1h_h:  float = 0
+        self._cur_1h_l:  float = 0
+        self._cur_1h_c:  float = 0
+        self._cur_1h_v:  float = 0
+
+        # PDH/PDL — Previous Day High/Low (for Brahmaastra trap detection)
+        self.prev_day_high: float = 0.0
+        self.prev_day_low:  float = 0.0
+        self.prev_day_close: float = 0.0
+        self._cur_day_date: int = 0   # YYYYMMDD int, tracks day boundary
+        self._cur_day_high: float = 0.0
+        self._cur_day_low:  float = 0.0
+        self._cur_day_close: float = 0.0
+
+    # ── Internal helpers ─────────────────────────────────────────────────────
+
+    def _update_tf(
+        self,
+        period_secs: int,
+        buf: CandleBuffer,
+        cur: list,   # [ts, o, h, l, c, v]  — mutated in place
+        price: float,
+        volume: float,
+        tick_ts: float,
+        o_raw: float,
+        h_raw: float,
+        l_raw: float,
+    ):
+        """Generic helper to update one higher-timeframe candle buffer.
+
+        cur = [ts, o, h, l, c, v]  (a list so we can mutate it)
+        """
+        period = int(tick_ts // period_secs) * period_secs
+        if period != cur[0]:
+            if cur[0] > 0:
+                buf.append(cur[0], cur[1], cur[2], cur[3], cur[4], cur[5])
+            cur[0] = period
+            cur[1] = o_raw   # use actual open of that period's first 1m candle
+            cur[2] = h_raw
+            cur[3] = l_raw
+            cur[4] = price
+            cur[5] = volume
+        else:
+            if h_raw > cur[2]: cur[2] = h_raw
+            if l_raw < cur[3]: cur[3] = l_raw
+            cur[4] = price
+            cur[5] += volume
 
     def on_tick(self, price: float, volume: float, tick_ts: float):
-        """Process a new tick — update current 1m and 5m candles."""
+        """Process a new tick — update 1m, 5m, 15m, 1H candles and PDH/PDL."""
         if price <= 0:
             return
 
-        # Determine 1m period
+        # ── 1m ──────────────────────────────────────────────────────────────
         period_1m = int(tick_ts // 60) * 60
-
         if period_1m != self._cur_1m_ts:
-            # New 1m candle — close previous if exists
             if self._cur_1m_ts > 0:
                 self.candles_1m.append(
                     self._cur_1m_ts, self._cur_1m_o,
                     self._cur_1m_h, self._cur_1m_l, self._cur_1m_c, self._cur_1m_v,
                 )
-            # Start new 1m candle
             self._cur_1m_ts = period_1m
             self._cur_1m_o = price
             self._cur_1m_h = price
@@ -160,70 +235,104 @@ class SymbolCandles:
             self._cur_1m_c = price
             self._cur_1m_v = volume
         else:
-            # Update current 1m candle
-            if price > self._cur_1m_h:
-                self._cur_1m_h = price
-            if price < self._cur_1m_l:
-                self._cur_1m_l = price
+            if price > self._cur_1m_h: self._cur_1m_h = price
+            if price < self._cur_1m_l: self._cur_1m_l = price
             self._cur_1m_c = price
             self._cur_1m_v += volume
 
-        # Determine 5m period
-        period_5m = int(tick_ts // 300) * 300
+        # Current 1m OHLCV for use in higher-TF updates
+        o1, h1, l1 = self._cur_1m_o, self._cur_1m_h, self._cur_1m_l
 
-        if period_5m != self._cur_5m_ts:
-            # New 5m candle — close previous if exists
-            if self._cur_5m_ts > 0:
-                self.candles_5m.append(
-                    self._cur_5m_ts, self._cur_5m_o,
-                    self._cur_5m_h, self._cur_5m_l, self._cur_5m_c, self._cur_5m_v,
-                )
-            # Start new 5m candle
-            self._cur_5m_ts = period_5m
-            self._cur_5m_o = price
-            self._cur_5m_h = price
-            self._cur_5m_l = price
-            self._cur_5m_c = price
-            self._cur_5m_v = volume
+        # ── 5m ──────────────────────────────────────────────────────────────
+        cur5 = [self._cur_5m_ts, self._cur_5m_o, self._cur_5m_h,
+                self._cur_5m_l, self._cur_5m_c, self._cur_5m_v]
+        self._update_tf(300, self.candles_5m, cur5, price, volume, tick_ts, o1, h1, l1)
+        (self._cur_5m_ts, self._cur_5m_o, self._cur_5m_h,
+         self._cur_5m_l, self._cur_5m_c, self._cur_5m_v) = cur5
+
+        # ── 15m ─────────────────────────────────────────────────────────────
+        cur15 = [self._cur_15m_ts, self._cur_15m_o, self._cur_15m_h,
+                 self._cur_15m_l, self._cur_15m_c, self._cur_15m_v]
+        self._update_tf(900, self.candles_15m, cur15, price, volume, tick_ts, o1, h1, l1)
+        (self._cur_15m_ts, self._cur_15m_o, self._cur_15m_h,
+         self._cur_15m_l, self._cur_15m_c, self._cur_15m_v) = cur15
+
+        # ── 1H ──────────────────────────────────────────────────────────────
+        cur1h = [self._cur_1h_ts, self._cur_1h_o, self._cur_1h_h,
+                 self._cur_1h_l, self._cur_1h_c, self._cur_1h_v]
+        self._update_tf(3600, self.candles_1h, cur1h, price, volume, tick_ts, o1, h1, l1)
+        (self._cur_1h_ts, self._cur_1h_o, self._cur_1h_h,
+         self._cur_1h_l, self._cur_1h_c, self._cur_1h_v) = cur1h
+
+        # ── PDH / PDL tracking ───────────────────────────────────────────────
+        # IST date as YYYYMMDD integer
+        ist_dt = datetime.fromtimestamp(tick_ts, tz=IST)
+        day_int = ist_dt.year * 10000 + ist_dt.month * 100 + ist_dt.day
+        if day_int != self._cur_day_date:
+            # Day rolled — freeze previous day's values as PDH/PDL/PDC
+            if self._cur_day_date > 0 and self._cur_day_high > 0:
+                self.prev_day_high  = self._cur_day_high
+                self.prev_day_low   = self._cur_day_low
+                self.prev_day_close = self._cur_day_close
+            self._cur_day_date  = day_int
+            self._cur_day_high  = price
+            self._cur_day_low   = price
+            self._cur_day_close = price
         else:
-            # Update current 5m candle
-            if price > self._cur_5m_h:
-                self._cur_5m_h = price
-            if price < self._cur_5m_l:
-                self._cur_5m_l = price
-            self._cur_5m_c = price
-            self._cur_5m_v += volume
+            if price > self._cur_day_high: self._cur_day_high = price
+            if price < self._cur_day_low:  self._cur_day_low  = price
+            self._cur_day_close = price
+
+    # ── Getters ──────────────────────────────────────────────────────────────
+
+    def _append_forming(self, d: dict, ts: float, o: float, h: float,
+                        l: float, c: float, v: float) -> dict:
+        """Append the currently-forming candle to a to_dict() result."""
+        if ts <= 0:
+            return d
+        for k, val in [("timestamp", ts), ("open", o), ("high", h),
+                       ("low", l), ("close", c), ("volume", v)]:
+            if k in d:
+                d[k] = np.append(d[k], val)
+            else:
+                d[k] = np.array([val], dtype=np.float64)
+        return d
 
     def get_candles_1m(self) -> dict:
-        """Get 1m candles including the current forming bar."""
         d = self.candles_1m.to_dict()
-        if self._cur_1m_ts > 0:
-            # Append current forming candle
-            for k, v in [
-                ("timestamp", self._cur_1m_ts), ("open", self._cur_1m_o),
-                ("high", self._cur_1m_h), ("low", self._cur_1m_l),
-                ("close", self._cur_1m_c), ("volume", self._cur_1m_v),
-            ]:
-                if k in d:
-                    d[k] = np.append(d[k], v)
-                else:
-                    d[k] = np.array([v], dtype=np.float64)
-        return d
+        return self._append_forming(
+            d, self._cur_1m_ts, self._cur_1m_o, self._cur_1m_h,
+            self._cur_1m_l, self._cur_1m_c, self._cur_1m_v,
+        )
 
     def get_candles_5m(self) -> dict:
-        """Get 5m candles including the current forming bar."""
         d = self.candles_5m.to_dict()
-        if self._cur_5m_ts > 0:
-            for k, v in [
-                ("timestamp", self._cur_5m_ts), ("open", self._cur_5m_o),
-                ("high", self._cur_5m_h), ("low", self._cur_5m_l),
-                ("close", self._cur_5m_c), ("volume", self._cur_5m_v),
-            ]:
-                if k in d:
-                    d[k] = np.append(d[k], v)
-                else:
-                    d[k] = np.array([v], dtype=np.float64)
-        return d
+        return self._append_forming(
+            d, self._cur_5m_ts, self._cur_5m_o, self._cur_5m_h,
+            self._cur_5m_l, self._cur_5m_c, self._cur_5m_v,
+        )
+
+    def get_candles_15m(self) -> dict:
+        d = self.candles_15m.to_dict()
+        return self._append_forming(
+            d, self._cur_15m_ts, self._cur_15m_o, self._cur_15m_h,
+            self._cur_15m_l, self._cur_15m_c, self._cur_15m_v,
+        )
+
+    def get_candles_1h(self) -> dict:
+        d = self.candles_1h.to_dict()
+        return self._append_forming(
+            d, self._cur_1h_ts, self._cur_1h_o, self._cur_1h_h,
+            self._cur_1h_l, self._cur_1h_c, self._cur_1h_v,
+        )
+
+    def get_pdh_pdl(self) -> dict:
+        """Return Previous Day High/Low/Close for trap-formation strategies."""
+        return {
+            "pdh":   self.prev_day_high,
+            "pdl":   self.prev_day_low,
+            "pdc":   self.prev_day_close,
+        }
 
 
 class CandleStore:
@@ -364,20 +473,42 @@ class CandleStore:
         logger.debug("fallback_candle_fetched", symbol=symbol, close=c, ts=ts)
 
     def get_candles(self, symbol: str, timeframe: str = "5m") -> dict:
-        """Get candle data for a symbol. Returns dict of numpy arrays or empty dict."""
+        """Get candle data for a symbol. Returns dict of numpy arrays or empty dict.
+
+        Supported timeframes: "1m", "5m", "15m", "1H"
+        """
         sc = self._symbols.get(symbol)
         if sc is None:
             return {}
         if timeframe == "1m":
             return sc.get_candles_1m()
+        if timeframe == "15m":
+            return sc.get_candles_15m()
+        if timeframe in ("1H", "1h", "60m"):
+            return sc.get_candles_1h()
         return sc.get_candles_5m()
+
+    def get_pdh_pdl(self, symbol: str) -> dict:
+        """Get Previous Day High/Low/Close for a symbol (for Brahmaastra traps).
+
+        Returns {"pdh": float, "pdl": float, "pdc": float} or empty dict.
+        """
+        sc = self._symbols.get(symbol)
+        if sc is None:
+            return {}
+        return sc.get_pdh_pdl()
 
     def get_bar_count(self, symbol: str, timeframe: str = "5m") -> int:
         sc = self._symbols.get(symbol)
         if sc is None:
             return 0
-        buf = sc.candles_5m if timeframe == "5m" else sc.candles_1m
-        return buf.count
+        if timeframe == "1m":
+            return sc.candles_1m.count
+        if timeframe == "15m":
+            return sc.candles_15m.count
+        if timeframe in ("1H", "1h", "60m"):
+            return sc.candles_1h.count
+        return sc.candles_5m.count
 
     def is_warmed_up(self, symbol: str) -> bool:
         return symbol in self._warmed_up
@@ -460,11 +591,12 @@ class CandleStore:
 
         sc = self._symbols[symbol]
 
-        # Load last 3 trading days (previous days first, then today)
-        # This ensures EMA(33) etc. have enough history even at 9:15 AM
+        # Load last 20 trading days (previous days first, then today)
+        # EMA100 on 1H (Parent-Child Momentum) needs ~16+ days of 1H history.
+        # We look back 35 calendar days to cover weekends, holidays, and weekends.
         loaded_days = 0
-        for days_back in range(7, -1, -1):  # 7 days back to today (covers weekends+holidays)
-            if loaded_days >= 3:
+        for days_back in range(35, -1, -1):  # 35 calendar days back covers ~20 trading days
+            if loaded_days >= 20:
                 break
             attempt_date = today - timedelta(days=days_back)
             if attempt_date > today:
@@ -516,15 +648,19 @@ class CandleStore:
             days_loaded=loaded_days,
             bars_1m=sc.candles_1m.count,
             bars_5m=sc.candles_5m.count,
+            bars_15m=sc.candles_15m.count,
+            bars_1h=sc.candles_1h.count,
+            pdh=sc.prev_day_high,
+            pdl=sc.prev_day_low,
         )
 
     def _ingest_candle_data(self, sc: SymbolCandles, data: dict):
-        """Ingest a day's worth of candle data into a SymbolCandles buffer."""
-        opens = data.get("open", [])
-        highs = data.get("high", [])
-        lows = data.get("low", [])
-        closes = data.get("close", [])
-        volumes = data.get("volume", [])
+        """Ingest a day's worth of 1m candle data, building 5m/15m/1H/PDH/PDL."""
+        opens      = data.get("open", [])
+        highs      = data.get("high", [])
+        lows       = data.get("low", [])
+        closes     = data.get("close", [])
+        volumes    = data.get("volume", [])
         timestamps = data.get("timestamp", [])
 
         if not closes or not timestamps:
@@ -532,14 +668,15 @@ class CandleStore:
 
         for i in range(len(closes)):
             ts = float(timestamps[i])
-            o = float(opens[i]) if i < len(opens) else float(closes[i])
-            h = float(highs[i]) if i < len(highs) else o
-            l = float(lows[i]) if i < len(lows) else o
-            c = float(closes[i])
-            v = float(volumes[i]) if i < len(volumes) else 0.0
+            o  = float(opens[i])   if i < len(opens)   else float(closes[i])
+            h  = float(highs[i])   if i < len(highs)   else o
+            l  = float(lows[i])    if i < len(lows)    else o
+            c  = float(closes[i])
+            v  = float(volumes[i]) if i < len(volumes) else 0.0
 
             sc.candles_1m.append(ts, o, h, l, c, v)
 
+            # ── 5m ──────────────────────────────────────────────────────────
             period_5m = int(ts // 300) * 300
             if period_5m != sc._cur_5m_ts:
                 if sc._cur_5m_ts > 0:
@@ -548,15 +685,58 @@ class CandleStore:
                         sc._cur_5m_h, sc._cur_5m_l, sc._cur_5m_c, sc._cur_5m_v,
                     )
                 sc._cur_5m_ts = period_5m
-                sc._cur_5m_o = o
-                sc._cur_5m_h = h
-                sc._cur_5m_l = l
-                sc._cur_5m_c = c
-                sc._cur_5m_v = v
+                sc._cur_5m_o = o; sc._cur_5m_h = h
+                sc._cur_5m_l = l; sc._cur_5m_c = c; sc._cur_5m_v = v
             else:
-                if h > sc._cur_5m_h:
-                    sc._cur_5m_h = h
-                if l < sc._cur_5m_l:
-                    sc._cur_5m_l = l
-                sc._cur_5m_c = c
-                sc._cur_5m_v += v
+                if h > sc._cur_5m_h: sc._cur_5m_h = h
+                if l < sc._cur_5m_l: sc._cur_5m_l = l
+                sc._cur_5m_c = c; sc._cur_5m_v += v
+
+            # ── 15m ─────────────────────────────────────────────────────────
+            period_15m = int(ts // 900) * 900
+            if period_15m != sc._cur_15m_ts:
+                if sc._cur_15m_ts > 0:
+                    sc.candles_15m.append(
+                        sc._cur_15m_ts, sc._cur_15m_o,
+                        sc._cur_15m_h, sc._cur_15m_l, sc._cur_15m_c, sc._cur_15m_v,
+                    )
+                sc._cur_15m_ts = period_15m
+                sc._cur_15m_o = o; sc._cur_15m_h = h
+                sc._cur_15m_l = l; sc._cur_15m_c = c; sc._cur_15m_v = v
+            else:
+                if h > sc._cur_15m_h: sc._cur_15m_h = h
+                if l < sc._cur_15m_l: sc._cur_15m_l = l
+                sc._cur_15m_c = c; sc._cur_15m_v += v
+
+            # ── 1H ──────────────────────────────────────────────────────────
+            period_1h = int(ts // 3600) * 3600
+            if period_1h != sc._cur_1h_ts:
+                if sc._cur_1h_ts > 0:
+                    sc.candles_1h.append(
+                        sc._cur_1h_ts, sc._cur_1h_o,
+                        sc._cur_1h_h, sc._cur_1h_l, sc._cur_1h_c, sc._cur_1h_v,
+                    )
+                sc._cur_1h_ts = period_1h
+                sc._cur_1h_o = o; sc._cur_1h_h = h
+                sc._cur_1h_l = l; sc._cur_1h_c = c; sc._cur_1h_v = v
+            else:
+                if h > sc._cur_1h_h: sc._cur_1h_h = h
+                if l < sc._cur_1h_l: sc._cur_1h_l = l
+                sc._cur_1h_c = c; sc._cur_1h_v += v
+
+            # ── PDH / PDL (from historical ingestion) ────────────────────────
+            ist_dt  = datetime.fromtimestamp(ts, tz=IST)
+            day_int = ist_dt.year * 10000 + ist_dt.month * 100 + ist_dt.day
+            if day_int != sc._cur_day_date:
+                if sc._cur_day_date > 0 and sc._cur_day_high > 0:
+                    sc.prev_day_high  = sc._cur_day_high
+                    sc.prev_day_low   = sc._cur_day_low
+                    sc.prev_day_close = sc._cur_day_close
+                sc._cur_day_date  = day_int
+                sc._cur_day_high  = h
+                sc._cur_day_low   = l
+                sc._cur_day_close = c
+            else:
+                if h > sc._cur_day_high: sc._cur_day_high = h
+                if l < sc._cur_day_low:  sc._cur_day_low  = l
+                sc._cur_day_close = c

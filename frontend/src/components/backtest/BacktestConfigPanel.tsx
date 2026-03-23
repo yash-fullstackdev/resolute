@@ -79,6 +79,10 @@ const INDICATOR_TYPES: Record<string, { label: string; params: { key: string; la
       { key: "std_mult", label: "Std Dev", default: 2.0, min: 0.5, max: 4, step: 0.1 },
     ],
   },
+  strategy_instance: {
+    label: "Strategy Instance",
+    params: [], // no numeric params — uses strategy_name dropdown
+  },
 };
 
 const TF_OPTIONS = [1, 2, 3, 5, 10, 15, 30, 60];
@@ -86,6 +90,7 @@ const TF_OPTIONS = [1, 2, 3, 5, 10, 15, 30, 60];
 const BACKTEST_STRATEGIES = [
   "ttm_squeeze", "supertrend_strategy", "vwap_supertrend",
   "ema_breakdown", "rsi_vwap_scalp", "ema33_ob", "smc_order_block",
+  "brahmaastra", "ema5_mean_reversion", "parent_child_momentum",
 ];
 
 
@@ -143,6 +148,27 @@ const STRATEGY_PARAMS: Record<string, { key: string; label: string; default: num
     { key: "ob_length", label: "OB Length", default: 6, min: 3, max: 20 },
     { key: "fvg_threshold", label: "FVG Thresh", default: 0.0005, min: 0.0001, max: 0.005, step: 0.0001 },
     { key: "max_sl_points", label: "Max SL (pts)", default: 20, min: 1, max: 200 },
+  ],
+  brahmaastra: [
+    { key: "gap_threshold_pct", label: "Gap %", default: 0.4, min: 0.1, max: 2.0, step: 0.1 },
+    { key: "wick_ratio_min", label: "Wick Ratio", default: 1.5, min: 0.5, max: 5.0, step: 0.1 },
+    { key: "partial_book_rr", label: "Partial RR", default: 1.0, min: 0.5, max: 2.0, step: 0.1 },
+    { key: "final_target_rr", label: "Final RR", default: 1.5, min: 1.0, max: 5.0, step: 0.1 },
+  ],
+  ema5_mean_reversion: [
+    { key: "ema_period", label: "EMA Period", default: 5, min: 3, max: 20 },
+    { key: "min_distance_ema_pct", label: "Min Dist %", default: 0.002, min: 0.0005, max: 0.01, step: 0.0005 },
+    { key: "rr_min", label: "Min RR", default: 3.0, min: 1.5, max: 5.0, step: 0.5 },
+    { key: "daily_loss_limit", label: "Daily Loss Limit", default: 3, min: 1, max: 5 },
+  ],
+  parent_child_momentum: [
+    { key: "ema_short", label: "EMA Short (1H)", default: 10, min: 3, max: 30 },
+    { key: "ema_mid", label: "EMA Mid (1H)", default: 30, min: 10, max: 60 },
+    { key: "ema_long", label: "EMA Long (1H)", default: 100, min: 50, max: 200 },
+    { key: "macd_fast", label: "MACD Fast", default: 48, min: 12, max: 100 },
+    { key: "macd_slow", label: "MACD Slow", default: 104, min: 26, max: 200 },
+    { key: "macd_signal", label: "MACD Signal", default: 36, min: 9, max: 72 },
+    { key: "profit_target_pct", label: "Profit Target %", default: 25, min: 10, max: 100 },
   ],
 };
 
@@ -323,7 +349,11 @@ export function BacktestConfigPanel({ onRun, isRunning }: BacktestConfigPanelPro
       start_date: startDate,
       end_date: endDate,
       bias_config: { bias_filters: [], min_agreement: 1, cooldown_bars: 0 },
-      strategies,
+      // Sync time_stop_bars from max_hold_bars so multi_runner reads the correct value
+      strategies: strategies.map((s) => ({
+        ...s,
+        time_stop_bars: s.max_hold_bars ?? s.time_stop_bars,
+      })),
       exit_config: exitCfg,
     };
     onRun(req);
@@ -410,10 +440,6 @@ export function BacktestConfigPanel({ onRun, isRunning }: BacktestConfigPanelPro
                 <Field label="Max Fires/Day">
                   <input type="number" value={slot.max_fires_per_day} min={1} max={20}
                     onChange={(e) => updateSlot(idx, "max_fires_per_day", Number(e.target.value))} className={INP} />
-                </Field>
-                <Field label="Time Stop">
-                  <input type="number" value={slot.time_stop_bars} min={1} max={375}
-                    onChange={(e) => updateSlot(idx, "time_stop_bars", Number(e.target.value))} className={INP} />
                 </Field>
               </div>
               {strategies.length > 1 && (
@@ -515,25 +541,63 @@ export function BacktestConfigPanel({ onRun, isRunning }: BacktestConfigPanelPro
                       return (
                         <div key={fi} className="flex items-center gap-1.5 rounded-lg bg-surface-dark/30 p-1.5">
                           <select value={f.type} onChange={(e) => {
-                            const def = INDICATOR_TYPES[e.target.value];
-                            const newParams: Record<string, number> = {};
-                            if (def) for (const p of def.params) newParams[p.key] = p.default;
-                            updateFilter({ type: e.target.value, params: newParams });
+                            const newType = e.target.value;
+                            const def = INDICATOR_TYPES[newType];
+                            const newParams: Record<string, number | string> = {};
+                            if (newType === "strategy_instance") {
+                              const first = availableInstances[0] as Record<string, unknown> | undefined;
+                              newParams.instance_name = String(first?.instance_name ?? "");
+                              newParams.strategy_name = String(first?.strategy_id ?? "");
+                            } else if (def) {
+                              for (const p of def.params) newParams[p.key] = p.default;
+                            }
+                            updateFilter({ type: newType, params: newParams });
                           }} className="rounded border border-surface-border bg-surface-light px-1.5 py-1 text-[10px] text-white focus:outline-none min-w-[100px]">
                             {Object.entries(INDICATOR_TYPES).map(([k, v]) => (
                               <option key={k} value={k}>{v.label}</option>
                             ))}
                           </select>
-                          <select value={f.timeframe} onChange={(e) => updateFilter({ timeframe: Number(e.target.value) })}
-                            className="rounded border border-surface-border bg-surface-light px-1 py-1 text-[10px] text-white focus:outline-none w-14">
-                            {TF_OPTIONS.map((tf) => <option key={tf} value={tf}>{tf}m</option>)}
-                          </select>
-                          {INDICATOR_TYPES[f.type]?.params.map((p) => (
-                            <input key={p.key} type="number" value={f.params[p.key] ?? p.default}
-                              min={p.min} max={p.max} step={p.step ?? 1} title={p.label}
-                              onChange={(e) => updateFilter({ params: { ...f.params, [p.key]: Number(e.target.value) } })}
-                              className="rounded border border-surface-border bg-surface-light px-1 py-1 text-[10px] text-white focus:outline-none w-12" />
-                          ))}
+                          {f.type !== "strategy_instance" && (
+                            <select value={f.timeframe} onChange={(e) => updateFilter({ timeframe: Number(e.target.value) })}
+                              className="rounded border border-surface-border bg-surface-light px-1 py-1 text-[10px] text-white focus:outline-none w-14">
+                              {TF_OPTIONS.map((tf) => <option key={tf} value={tf}>{tf}m</option>)}
+                            </select>
+                          )}
+                          {f.type === "strategy_instance" ? (
+                            <select
+                              value={String(f.params.instance_name ?? "")}
+                              onChange={(e) => {
+                                const selected = availableInstances.find(
+                                  (i) => (i as Record<string, unknown>).instance_name === e.target.value
+                                ) as Record<string, unknown> | undefined;
+                                updateFilter({
+                                  params: {
+                                    ...f.params,
+                                    instance_name: e.target.value,
+                                    strategy_name: String(selected?.strategy_id ?? ""),
+                                  },
+                                });
+                              }}
+                              className="rounded border border-surface-border bg-surface-light px-1.5 py-1 text-[10px] text-white focus:outline-none min-w-[150px]"
+                            >
+                              {availableInstances.length === 0 && (
+                                <option value="">No saved instances</option>
+                              )}
+                              {availableInstances.map((inst) => {
+                                const i = inst as Record<string, unknown>;
+                                const key = String(i.instance_id ?? i.instance_name);
+                                const label = `${i.strategy_display} — ${i.instance_name}`;
+                                return <option key={key} value={String(i.instance_name)}>{label}</option>;
+                              })}
+                            </select>
+                          ) : (
+                            INDICATOR_TYPES[f.type]?.params.map((p) => (
+                              <input key={p.key} type="number" value={Number(f.params[p.key]) || p.default}
+                                min={p.min} max={p.max} step={p.step ?? 1} title={p.label}
+                                onChange={(e) => updateFilter({ params: { ...f.params, [p.key]: Number(e.target.value) } })}
+                                className="rounded border border-surface-border bg-surface-light px-1 py-1 text-[10px] text-white focus:outline-none w-12" />
+                            ))
+                          )}
                           <button onClick={() => updateSlotBias(idx, (s) => {
                             const bc = s.bias_config ?? { bias_filters: [], min_agreement: 1, mode: "bias_filtered" as const };
                             const filters = bc.bias_filters.filter((_, i) => i !== fi);

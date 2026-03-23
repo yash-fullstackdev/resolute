@@ -11,25 +11,32 @@ import type { MultiBacktestRequest, BacktestResult } from "@/types/backtest";
 import { apiClient } from "@/lib/api";
 import { INDICATOR_TYPES } from "@/lib/bias-indicators";
 import { AlertCircle, TrendingUp, BarChart2, Calendar, List, Layers, Shield, Rocket, Check, Zap } from "lucide-react";
+import { DeployDialog } from "@/components/backtest/DeployDialog";
+import { STRATEGY_NAMES } from "@/lib/constants";
 
 type ResultTab = "overview" | "equity" | "heatmap" | "trades" | "strategies";
 
 function StrategyBreakdown({ result }: { result: BacktestResult }) {
   const strategyNames = Object.keys(result.per_strategy_metrics ?? {});
   const [deployed, setDeployed] = useState<Record<string, boolean>>({});
+  const [deployTarget, setDeployTarget] = useState<string | null>(null);
 
   if (strategyNames.length === 0) return null;
 
-  const handleDeploy = async (name: string) => {
+  const handleDeployConfirm = async (instanceName: string) => {
+    const name = deployTarget;
+    if (!name) return;
+    setDeployTarget(null);
     const slot = result.slot_configs?.find((s) => s.strategy_name === name);
     if (!slot) return;
     try {
       await apiClient.post("/strategies/deploy", {
         strategy_name: name,
-        instance_name: `${name.replace(/_/g, " ")} — backtest deploy`,
+        instance_name: instanceName,
         instruments: result.instrument ? [result.instrument] : [],
         params: slot.params,
         bias_config: slot.bias_config,
+        exit_config: slot.exit_config,
         session: slot.session,
         mode: "paper",
       });
@@ -39,6 +46,13 @@ function StrategyBreakdown({ result }: { result: BacktestResult }) {
 
   return (
     <div className="space-y-4">
+      {deployTarget && (
+        <DeployDialog
+          defaultName={`${STRATEGY_NAMES[deployTarget] ?? deployTarget.replace(/_/g, " ")} — backtest`}
+          onConfirm={handleDeployConfirm}
+          onCancel={() => setDeployTarget(null)}
+        />
+      )}
       {strategyNames.map((name) => {
         const m = result.per_strategy_metrics[name];
         if (!m) return null;
@@ -57,9 +71,9 @@ function StrategyBreakdown({ result }: { result: BacktestResult }) {
         return (
           <div key={name} className="rounded-xl border border-surface-border bg-surface-light/20 p-4">
             <div className="flex items-center justify-between mb-3">
-              <h4 className="text-sm font-semibold text-white">{name.replace(/_/g, " ")}</h4>
+              <h4 className="text-sm font-semibold text-white">{STRATEGY_NAMES[name] ?? name.replace(/_/g, " ")}</h4>
               <button
-                onClick={() => handleDeploy(name)}
+                onClick={() => setDeployTarget(name)}
                 disabled={deployed[name]}
                 className={`flex items-center gap-1 rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors ${
                   deployed[name]

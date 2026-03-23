@@ -1,12 +1,14 @@
 """SMCOrderBlockStrategy — Smart Money Concepts Order Block entry.
 
-Entry logic:
-  1. 5m BOS confirms trend direction (HH+HL = bullish, LH+LL = bearish).
-  2. Price returns to unmitigated Order Block matching trend.
-  3. 1m upward momentum for bullish OB, downward for bearish OB.
-  4. Volume ≥ 1.0x average.
-  5. Optional: FVG overlap raises confidence.
-  6. Optional: liquidity sweep bonus.
+Entry logic (BigBeluga-aligned):
+  1. 5m market structure confirms trend via BOS/CHoCH state machine.
+  2. At least one unmitigated Order Block aligned with trend exists.
+     OBs are ATR-sized at structure extremes (BigBeluga "Length" mode).
+  3. Current 1m price is inside the OB zone.
+  4. 1m short-term momentum confirms direction (3-bar close direction).
+  5. 5m ATR regime: not a flat/choppy market.
+  6. FVG overlap with the OB → +10% confidence bonus.
+  7. Liquidity sweep detected → +15% confidence bonus.
 
 Max 5 fires per day per underlying.
 """
@@ -21,7 +23,7 @@ import structlog
 from ..capital_tier import CapitalTier, StrategyCategory
 from .base import BaseStrategy, Signal, Leg, Position
 from .indicators import atr_wilder
-from .smc_helpers import detect_bos_choch, detect_fvg, find_order_blocks
+from .smc_helpers import detect_market_structure, detect_fvg
 
 logger = structlog.get_logger(service="user_worker_pool", module="smc_order_block")
 
@@ -65,43 +67,58 @@ class SMCOrderBlockStrategy(BaseStrategy):
         if not data_1m or "close" not in data_1m:
             return None
 
-        ob_length = config.get("ob_length", 6)
-        fvg_threshold = config.get("fvg_threshold", 0.0005)
-        max_fires = config.get("max_fires_per_day", 5)
+        ob_length    = config.get("ob_length", 5)
+        fvg_thresh   = config.get("fvg_threshold", 0.0005)
+        max_fires    = config.get("max_fires_per_day", 5)
 
-        # ── daily fire limit ──────────────────────────────────────────
-        key = chain.underlying
+        # ── daily fire limit ──────────────────────────────────────────────
+        key   = chain.underlying
         today = _date.today().isoformat()
         if self._last_date.get(key) != today:
             self._last_date[key] = today
-            self._fires[key] = 0
+            self._fires[key]     = 0
         if self._fires.get(key, 0) >= max_fires:
             return None
 
-        # 1. 5m structural analysis
-        state = detect_bos_choch(
-            data_5m["high"], data_5m["low"], data_5m["close"], ob_length
+        # ── 1. 5m market structure (BigBeluga state machine) ─────────────
+        opens_5m = data_5m.get("open", data_5m["close"])
+        state = detect_market_structure(
+            data_5m["high"],
+            data_5m["low"],
+            data_5m["close"],
+            opens_5m,
+            length=ob_length,
         )
         if not state or state["trend"] == 0:
             return None
 
-        # 2. Active order blocks
-        obs = find_order_blocks(data_5m, state, ob_length, limit=5)
+        # ── 2. Active OBs aligned with trend ─────────────────────────────
+        obs = state["bull_obs"] if state["trend"] == 1 else state["bear_obs"]
         if not obs:
             return None
 
-        # 3. Is 1m price inside an OB?
+        # ── 3. Has 1m price touched the OB zone? ─────────────────────────
+        # BigBeluga trigger: low < ob.top (any wick into zone).
+        # We require close >= ob.btm (holds above zone bottom = conviction).
         curr_price = data_1m["close"][-1]
-        active_ob = None
-        for ob in obs:
-            if ob["btm"] <= curr_price <= ob["top"]:
-                if ob["bull"] == (state["trend"] == 1):
+        curr_low   = data_1m["low"][-1]
+        curr_high  = data_1m["high"][-1]
+        active_ob  = None
+        for ob in reversed(obs):  # most recent OB first
+            if state["trend"] == 1:
+                # Bullish OB: wick touched zone, close holds above bottom
+                if curr_low <= ob["top"] and curr_price >= ob["btm"]:
+                    active_ob = ob
+                    break
+            else:
+                # Bearish OB: wick touched zone, close holds below top
+                if curr_high >= ob["btm"] and curr_price <= ob["top"]:
                     active_ob = ob
                     break
         if not active_ob:
             return None
 
-        # 4. 1m momentum confirmation
+        # ── 4. 1m momentum confirmation ───────────────────────────────────
         if len(data_1m["close"]) < 5:
             return None
         recent = data_1m["close"][-3:]
@@ -110,7 +127,7 @@ class SMCOrderBlockStrategy(BaseStrategy):
         if state["trend"] == -1 and recent[-1] >= recent[0]:
             return None
 
-        # 5. ATR regime
+        # ── 5. ATR regime: avoid flat/choppy market ───────────────────────
         atr_vals = atr_wilder(data_5m["high"], data_5m["low"], data_5m["close"], 14)
         if not atr_vals:
             return None
@@ -118,15 +135,15 @@ class SMCOrderBlockStrategy(BaseStrategy):
         if atr_pct < 0.0004:
             return None
 
-        # 7. FVG overlap bonus
-        fvgs = detect_fvg(data_5m["high"], data_5m["low"], data_5m["close"], fvg_threshold)
+        # ── 6. FVG overlap bonus ──────────────────────────────────────────
+        fvgs = detect_fvg(data_5m["high"], data_5m["low"], data_5m["close"], fvg_thresh)
         fvg_overlap = any(f["btm"] <= active_ob["avg"] <= f["top"] for f in fvgs)
-        sweep = state.get("last_sweep", False)
+        sweep       = state.get("last_sweep", False)
 
         signal_dir = "BUY" if state["trend"] == 1 else "SELL"
         self._fires[key] = self._fires.get(key, 0) + 1
 
-        # Dynamic confidence
+        # ── Confidence ────────────────────────────────────────────────────
         confidence = 0.75
         if fvg_overlap:
             confidence += 0.10
@@ -134,28 +151,29 @@ class SMCOrderBlockStrategy(BaseStrategy):
             confidence += 0.15
         confidence = min(confidence, 0.95)
 
-        spot = curr_price
+        # ── Option leg ────────────────────────────────────────────────────
+        spot        = curr_price
         option_type = "CE" if signal_dir == "BUY" else "PE"
-        dte = self.get_dte(chain)
+        dte         = self.get_dte(chain)
 
         if chain.strikes:
             strike_data = self.find_atm_strike(chain, option_type)
             if strike_data is None:
                 return None
-            premium = strike_data.call_ltp if option_type == "CE" else strike_data.put_ltp
+            premium    = strike_data.call_ltp if option_type == "CE" else strike_data.put_ltp
             if premium <= 0:
                 premium = _estimate_premium(spot, chain.atm_iv, dte)
             strike_val = strike_data.strike
         else:
             strike_val = _atm_strike(spot, chain.underlying)
-            premium = _estimate_premium(spot, chain.atm_iv, dte)
+            premium    = _estimate_premium(spot, chain.atm_iv, dte)
 
-        stop_loss_pct = config.get("stop_loss_pct", 40.0)
-        target_pct = config.get("target_pct", 100.0)
+        stop_loss_pct   = config.get("stop_loss_pct", 40.0)
+        target_pct      = config.get("target_pct", 100.0)
         stop_loss_price = premium * (1.0 - stop_loss_pct / 100.0)
-        target_price = premium * (1.0 + target_pct / 100.0)
+        target_price    = premium * (1.0 + target_pct / 100.0)
 
-        now = datetime.now(timezone.utc)
+        now       = datetime.now(timezone.utc)
         time_stop = now.replace(hour=9, minute=50, second=0, microsecond=0)
         if time_stop <= now:
             time_stop = now + timedelta(hours=2)
@@ -186,10 +204,12 @@ class SMCOrderBlockStrategy(BaseStrategy):
             confidence=round(confidence, 2),
             metadata={
                 "signal_type": signal_dir,
-                "ob_top": round(active_ob["top"], 2),
-                "ob_btm": round(active_ob["btm"], 2),
+                "ob_top":      round(active_ob["top"], 2),
+                "ob_btm":      round(active_ob["btm"], 2),
                 "fvg_overlap": fvg_overlap,
-                "sweep": sweep,
+                "sweep":       sweep,
+                "choch_level": round(state["choch_level"], 2) if state["choch_level"] else None,
+                "bos_level":   round(state["bos_level"], 2) if state["bos_level"] else None,
             },
         )
 
@@ -198,6 +218,8 @@ class SMCOrderBlockStrategy(BaseStrategy):
         if not data_1m or "close" not in data_1m:
             return False
         curr_price = data_1m["close"][-1]
-        return (curr_price <= position.stop_loss_price
-                or curr_price >= position.target_price
-                or datetime.now(timezone.utc) >= position.time_stop)
+        return (
+            curr_price <= position.stop_loss_price
+            or curr_price >= position.target_price
+            or datetime.now(timezone.utc) >= position.time_stop
+        )

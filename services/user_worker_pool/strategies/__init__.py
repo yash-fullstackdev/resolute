@@ -16,6 +16,9 @@ from .ema_breakdown import EMABreakdownStrategy
 from .rsi_vwap_scalp import RSIVWAPScalpStrategy
 from .ema33_ob import EMA33OBStrategy
 from .smc_order_block import SMCOrderBlockStrategy
+from .brahmaastra import BrahmaastraStrategy
+from .ema5_mean_reversion import EMA5MeanReversionStrategy
+from .parent_child_momentum import ParentChildMomentumStrategy
 
 STRATEGY_REGISTRY: dict[str, type[BaseStrategy]] = {
     "ttm_squeeze": TTMSqueezeStrategy,
@@ -25,6 +28,12 @@ STRATEGY_REGISTRY: dict[str, type[BaseStrategy]] = {
     "rsi_vwap_scalp": RSIVWAPScalpStrategy,
     "ema33_ob": EMA33OBStrategy,
     "smc_order_block": SMCOrderBlockStrategy,
+    # S1 — 9:15–10:15 ORB + Trap
+    "brahmaastra": BrahmaastraStrategy,
+    # S2 — 5 EMA mean reversion (5m PE / 15m CE)
+    "ema5_mean_reversion": EMA5MeanReversionStrategy,
+    # S3 — 1H parent + 5m child dual-TF momentum
+    "parent_child_momentum": ParentChildMomentumStrategy,
 }
 
 

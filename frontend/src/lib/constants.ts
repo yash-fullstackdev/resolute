@@ -22,6 +22,9 @@ export const STRATEGY_NAMES: Record<string, string> = {
   rsi_vwap_scalp: "RSI VWAP Scalp",
   ema33_ob: "33 EMA Option Buying",
   smc_order_block: "SMC Order Block",
+  brahmaastra: "Brahmaastra",
+  ema5_mean_reversion: "5 EMA Mean Reversion",
+  parent_child_momentum: "Parent-Child Momentum",
 };
 
 export const TIER_NAMES: Record<string, string> = {

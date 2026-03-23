@@ -181,6 +181,17 @@ class BaseStrategy(ABC):
         return closest
 
     @staticmethod
+    def find_strike_near(chain, target_strike: float, option_type: str) -> Any | None:
+        """Find the chain strike closest to *target_strike*.
+
+        Used by strategies that compute their own target (e.g. 1-ITM, 1-OTM)
+        and need the nearest available contract.
+        """
+        if not chain.strikes:
+            return None
+        return min(chain.strikes, key=lambda s: abs(s.strike - target_strike))
+
+    @staticmethod
     def find_otm_strike(chain, option_type: str, steps: int = 1) -> Any | None:
         """Find an OTM strike *steps* away from ATM.
 

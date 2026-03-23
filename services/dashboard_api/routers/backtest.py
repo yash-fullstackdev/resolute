@@ -350,6 +350,7 @@ class OptimizeRequest(BaseModel):
     strategy_name: str
     bias_config: dict[str, Any] | None = None
     exit_config: ExitConfig = Field(default_factory=ExitConfig)
+    exit_grid: dict[str, list] | None = None  # sweep arrays for sl/tp/max_hold
     param_grid: dict[str, list] = Field(default_factory=dict)
     optimize_for: str = "profit_factor"
     session: str = "all"
@@ -404,6 +405,7 @@ def _run_optimize_sync(body: OptimizeRequest) -> dict:
         "strategy_name": body.strategy_name,
         "param_grid": body.param_grid,
         "exit_config": body.exit_config.model_dump(),
+        "exit_grid": body.exit_grid or {},
         "bias_config": body.bias_config or {},
         "optimize_for": body.optimize_for,
         "session": body.session,

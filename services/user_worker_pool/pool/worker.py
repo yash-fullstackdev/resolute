@@ -78,6 +78,7 @@ class StrategyInstance:
     signals_today_buy: int = 0
     signals_today_sell: int = 0
     last_signal_ts: float = 0.0
+    last_signal_direction: int = 0         # raw evaluate() direction: +1 BUY, -1 SELL, 0 none
     last_bias: str = ""
 
     def check_daily_limit(self) -> bool:
@@ -89,6 +90,8 @@ class StrategyInstance:
             self.signals_today_buy = 0
             self.signals_today_sell = 0
             self._last_reset_date = today
+            # Reset per-strategy daily counters
+            self.config.pop("ema5_losses_today", None)
         if self.max_daily_loss_pts is None:
             return False
         if self.daily_pnl <= -self.max_daily_loss_pts:
@@ -399,8 +402,11 @@ class UserWorker:
             return
 
         # Build a lightweight chain-like object with candle data
-        candles_5m = self._candle_store.get_candles(symbol, "5m")
-        candles_1m = self._candle_store.get_candles(symbol, "1m")
+        candles_5m  = self._candle_store.get_candles(symbol, "5m")
+        candles_1m  = self._candle_store.get_candles(symbol, "1m")
+        candles_15m = self._candle_store.get_candles(symbol, "15m")
+        candles_1h  = self._candle_store.get_candles(symbol, "1H")
+        pdh_pdl     = self._candle_store.get_pdh_pdl(symbol)
 
         if not candles_5m or "close" not in candles_5m or len(candles_5m["close"]) < 15:
             return
@@ -410,10 +416,14 @@ class UserWorker:
             "underlying": symbol,
             "underlying_price": price,
             "atm_iv": tick_data.get("atm_iv", 0.15),
+            "india_vix": tick_data.get("india_vix", 0.0),
             "segment": "nse",
             "strikes": tick_data.get("strikes", []),
-            "candles_1m": candles_1m,
-            "candles_5m": candles_5m,
+            "candles_1m":  candles_1m,
+            "candles_5m":  candles_5m,
+            "candles_15m": candles_15m,
+            "candles_1h":  candles_1h,
+            "pdh_pdl":     pdh_pdl,
         }
         chain = _ChainSnapshot(chain_data)
 
@@ -435,10 +445,17 @@ class UserWorker:
             inst.last_evaluated_ts = time.time()
             inst.total_evaluations += 1
 
+            # Build live strategy signals map for strategy_instance bias filters
+            _live_strategy_signals = {
+                i.instance_name: i.last_signal_direction for i in self._instances
+            }
+
             # Bias gate
             if inst.bias_evaluator:
                 try:
-                    bias_direction = inst.bias_evaluator.get_current_bias(candles_5m, candles_1m)
+                    bias_direction = inst.bias_evaluator.get_current_bias(
+                        candles_5m, candles_1m, live_strategy_signals=_live_strategy_signals
+                    )
                     inst.last_bias = bias_direction or ""
                     if bias_direction is None:
                         continue
@@ -455,6 +472,10 @@ class UserWorker:
 
             if signal is None:
                 continue
+
+            # Record raw direction so other instances can use this as strategy_instance bias
+            _raw_dir = signal.direction if hasattr(signal, "direction") else ""
+            inst.last_signal_direction = 1 if _raw_dir in ("BULLISH", "BUY") else (-1 if _raw_dir in ("BEARISH", "SELL") else 0)
 
             if bias_direction is not None:
                 sig_dir = "BUY" if signal.direction in ("BULLISH", "BUY") else "SELL"
@@ -523,12 +544,21 @@ class UserWorker:
         # Inject candles from CandleStore (real market data, not mock)
         underlying = _normalize_symbol(chain.underlying)
         chain.underlying = underlying  # normalize for instance matching
-        candles_5m = self._candle_store.get_candles(underlying, "5m")
-        candles_1m = self._candle_store.get_candles(underlying, "1m")
+        candles_5m  = self._candle_store.get_candles(underlying, "5m")
+        candles_1m  = self._candle_store.get_candles(underlying, "1m")
+        candles_15m = self._candle_store.get_candles(underlying, "15m")
+        candles_1h  = self._candle_store.get_candles(underlying, "1H")
+        pdh_pdl     = self._candle_store.get_pdh_pdl(underlying)
         if candles_5m:
-            chain.candles_5m = candles_5m
+            chain.candles_5m  = candles_5m
         if candles_1m:
-            chain.candles_1m = candles_1m
+            chain.candles_1m  = candles_1m
+        if candles_15m:
+            chain.candles_15m = candles_15m
+        if candles_1h:
+            chain.candles_1h  = candles_1h
+        if pdh_pdl:
+            chain.pdh_pdl     = pdh_pdl
 
         # (a) Circuit breaker check -- absolute, no override
         if self.discipline.circuit_breaker.is_user_halted(self.tenant_id):
@@ -575,12 +605,19 @@ class UserWorker:
             if inst.check_daily_limit():
                 continue
 
+            # Build live strategy signals map for strategy_instance bias filters
+            _live_strategy_signals = {
+                i.instance_name: i.last_signal_direction for i in self._instances
+            }
+
             # Bias gate — evaluate bias BEFORE strategy
             if inst.bias_evaluator:
                 try:
                     candle_5m = getattr(chain, "candles_5m", None)
                     candle_1m = getattr(chain, "candles_1m", None)
-                    bias_direction = inst.bias_evaluator.get_current_bias(candle_5m, candle_1m)
+                    bias_direction = inst.bias_evaluator.get_current_bias(
+                        candle_5m, candle_1m, live_strategy_signals=_live_strategy_signals
+                    )
                     if bias_direction is None:
                         continue  # no clear bias → skip
                 except Exception:
@@ -607,6 +644,10 @@ class UserWorker:
 
             if signal is None:
                 continue
+
+            # Record raw direction so other instances can use this as strategy_instance bias
+            _raw_dir = signal.direction if hasattr(signal, "direction") else ""
+            inst.last_signal_direction = 1 if _raw_dir in ("BULLISH", "BUY") else (-1 if _raw_dir in ("BEARISH", "SELL") else 0)
 
             # Bias alignment — signal direction must match bias
             if bias_direction is not None:
@@ -1060,6 +1101,17 @@ class UserWorker:
             asyncio.create_task(self.discipline.journal.persist_entry(entry))
             asyncio.create_task(self.discipline.journal.publish_entry(entry))
 
+        # EMA5 daily loss circuit breaker — increment counter on SL hit
+        if fill.fill_type == "STOP_HIT" and position.strategy_name == "ema5_mean_reversion":
+            for inst in self._instances:
+                if inst.strategy.name == "ema5_mean_reversion":
+                    inst.config["ema5_losses_today"] = inst.config.get("ema5_losses_today", 0) + 1
+                    self._log.info(
+                        "ema5_loss_count",
+                        tenant_id=self.tenant_id,
+                        losses_today=inst.config["ema5_losses_today"],
+                    )
+
         # Check circuit breaker after every fill
         locked_plan = self.discipline.plan_manager.get_active_plan(self.tenant_id)
         if locked_plan:
@@ -1352,8 +1404,14 @@ class _ChainSnapshot:
 
         # Candle data injected by signal_engine CandleAggregator
         # Format: {open: [...], high: [...], low: [...], close: [...], volume: [...], timestamp: [...]}
-        self.candles_1m: dict = data.get("candles_1m", {})
-        self.candles_5m: dict = data.get("candles_5m", {})
+        self.candles_1m:  dict = data.get("candles_1m",  {})
+        self.candles_5m:  dict = data.get("candles_5m",  {})
+        self.candles_15m: dict = data.get("candles_15m", {})
+        self.candles_1h:  dict = data.get("candles_1h",  {})
+        # PDH/PDL for trap-formation strategies (Brahmaastra)
+        self.pdh_pdl:     dict = data.get("pdh_pdl",     {})
+        # India VIX injected from regime (used by EMA5 and Parent-Child filters)
+        self.india_vix:   float = float(data.get("india_vix", 0.0))
 
 
 class _StrikeData:

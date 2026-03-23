@@ -23,7 +23,7 @@ export interface BacktestStrategyOption {
 export interface BiasFilter {
   type: string;
   timeframe: number;
-  params: Record<string, number>;
+  params: Record<string, number | string>;
 }
 
 export interface BiasConfig {
@@ -176,6 +176,7 @@ export interface SlotConfig {
   strategy_name: string;
   params: Record<string, number>;
   bias_config?: BiasConfig;
+  exit_config?: ExitConfig;
   session: string;
   max_fires_per_day: number;
   time_stop_bars: number;

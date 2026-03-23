@@ -482,6 +482,10 @@ def run(config: dict) -> dict:
     ts_5m = data_5m.get("timestamp", np.array([]))
     n_5m = len(data_5m.get("close", []))
 
+    # Build 15m and 1H candles (required by brahmaastra, ema5_mean_reversion, parent_child)
+    data_15m = aggregate_candles(data_1m, 900)
+    data_1h  = aggregate_candles(data_1m, 3600)
+
     # Compute ATR(14) on 5m — shared across all strategies
     atr_arr = atr_full(data_5m["high"], data_5m["low"], data_5m["close"], 14) if n_5m > 15 else np.array([])
     atr_cache: list[float | None] = [None] * n_5m
@@ -489,8 +493,44 @@ def run(config: dict) -> dict:
         if 14 + ai < n_5m:
             atr_cache[14 + ai] = float(atr_arr[ai])
 
-    # Per-strategy bias caches (keyed by strategy name)
-    # Each strategy can have its own bias_config, or fall back to global
+    # ── Pre-compute strategy signals FIRST ───────────────────────────
+    # Must happen before bias precomputation so strategy_instance bias filters
+    # can reference precomputed signal arrays from other slots.
+    from .fast_strategies import precompute_strategy_signals, build_prev_day_arrays
+
+    # Pre-build prev-day arrays for Brahmaastra once (data-derived, not per-combo)
+    _brahmaastra_prev_day: dict = {}
+    _n15 = len(data_15m.get("close", []))
+    _n1h = len(data_1h.get("close", []))
+    if any(slot["name"] == "brahmaastra" for slot in slots) and _n15 > 0:
+        pdc_arr, pdh_arr, pdl_arr = build_prev_day_arrays(
+            data_1m["close"], data_1m["high"], data_1m["low"],
+            data_1m["timestamp"], data_15m["timestamp"],
+        )
+        _brahmaastra_prev_day = {"pdc_arr": pdc_arr, "pdh_arr": pdh_arr, "pdl_arr": pdl_arr}
+
+    fast_signals: dict[str, np.ndarray | None] = {}
+    for slot in slots:
+        name = slot["name"]
+        if name not in fast_signals:
+            opens_5m = data_5m.get("open", data_5m["close"])
+            slot_params = dict(slot.get("params") or {})
+            if name == "brahmaastra":
+                slot_params.update(_brahmaastra_prev_day)
+            fast_signals[name] = precompute_strategy_signals(
+                name, data_5m["close"], data_5m["high"], data_5m["low"],
+                opens_5m, slot_params,
+                closes_15m=data_15m.get("close")     if _n15 > 0 else None,
+                highs_15m=data_15m.get("high")       if _n15 > 0 else None,
+                lows_15m=data_15m.get("low")         if _n15 > 0 else None,
+                opens_15m=data_15m.get("open")       if _n15 > 0 else None,
+                timestamps_15m=data_15m.get("timestamp") if _n15 > 0 else None,
+                closes_1h=data_1h.get("close")       if _n1h > 0 else None,
+            )
+
+    # ── Per-strategy bias caches (keyed by strategy name) ────────────
+    # Each strategy can have its own bias_config, or fall back to global.
+    # fast_signals is passed so strategy_instance filters can reference them.
     strategy_bias_caches: dict[str, list] = {}
     _bias_config_cache: dict[str, tuple] = {}  # deduplicate identical configs
 
@@ -514,25 +554,12 @@ def run(config: dict) -> dict:
             continue
 
         evaluator = BiasEvaluator(s_bias_cfg)
-        bias_list, _ = evaluator.precompute_bias_array(data_1m)
+        bias_list, _ = evaluator.precompute_bias_array(data_1m, precomputed_signals=fast_signals)
         strategy_bias_caches[s_name] = bias_list
         _bias_config_cache[config_key] = bias_list
 
     # ── 5m close events ───────────────────────────────────────────────
     five_m_close_set = _build_5m_close_set(timestamps, ts_5m)
-
-    # ── Pre-compute strategy signals (fast path) ─────────────────────
-    from .fast_strategies import precompute_strategy_signals
-
-    fast_signals: dict[str, np.ndarray | None] = {}
-    for slot in slots:
-        name = slot["name"]
-        if name not in fast_signals:
-            opens_5m = data_5m.get("open", data_5m["close"])
-            fast_signals[name] = precompute_strategy_signals(
-                name, data_5m["close"], data_5m["high"], data_5m["low"],
-                opens_5m, slot.get("params"),
-            )
 
     _bar_date_ref = [_date.today()]
 
@@ -560,11 +587,15 @@ def run(config: dict) -> dict:
     lot_size = LOT_SIZES.get(instrument, 50)
 
     EQUITY_EVERY = 15
-    entry_start = 560   # 9:20
-    morning_end = 690   # 11:30
-    afternoon_start = 780  # 13:00
-    entry_cutoff = 870  # 14:30
-    force_exit_min = 915  # 15:15
+    # Global fallback session bounds (overridden per-strategy in the inner loop)
+    morning_end     = 690   # 11:30 IST
+    afternoon_start = 780   # 13:00 IST
+
+    from .fast_strategies import get_strategy_session
+    # Pre-build per-strategy session config once
+    _slot_session: dict[str, dict] = {
+        slot["name"]: get_strategy_session(slot["name"]) for slot in slots
+    }
 
     # ── Build sorted list of 5m close 1m-indices ─────────────────────
     five_m_close_indices = sorted(five_m_close_set)
@@ -585,6 +616,8 @@ def run(config: dict) -> dict:
         d = ot["direction"]
         sl_val = ot["sl"]
         tp_val = ot["tp"]
+        # Use strategy-specific kill-switch time (e.g. 10:30 for brahmaastra, 15:15 for others)
+        _force_min = ot.get("force_exit_min", 915)
 
         # Scan window from entry+1 to entry+max_hold (or end of day)
         end_bar = min(entry_bar + max_hold + 1, n)
@@ -607,8 +640,8 @@ def run(config: dict) -> dict:
             sl_hits = np.where(h_slice >= sl_val)[0]
             tp_hits = np.where(l_slice <= tp_val)[0]
 
-        # Force exit at 15:15
-        force_hits = np.where(tmin_slice >= force_exit_min)[0]
+        # Force exit at strategy-specific kill-switch time
+        force_hits = np.where(tmin_slice >= _force_min)[0]
 
         # Find earliest event
         sl_bar = int(sl_hits[0]) if len(sl_hits) > 0 else len(h_slice) + 1
@@ -675,10 +708,8 @@ def run(config: dict) -> dict:
 
         atr = atr_cache[n5 - 1] if n5 - 1 < len(atr_cache) else None
 
-        is_morning = entry_start <= t_min <= morning_end
-        is_afternoon = afternoon_start <= t_min <= entry_cutoff
-
-        if not (is_morning or is_afternoon) or not atr or atr <= 0:
+        # Broad gate: any slot's window could be open — defer fine filtering to per-slot
+        if not atr or atr <= 0:
             if idx_pos % 5 == 0:
                 dd = peak_pnl - cumulative_pnl
                 equity_snapshots.append({
@@ -694,23 +725,40 @@ def run(config: dict) -> dict:
             s_name = slot["name"]
             s_session = slot.get("session", "all")
             s_concurrent = slot.get("concurrent", s_name in CONCURRENT_BY_DEFAULT)
-            s_max_fires = slot.get("max_fires_per_day", 5)
+            # Max fires: slot override first, else per-strategy default from shared config
+            _sc = _slot_session[s_name]
+            s_max_fires = slot.get("max_fires_per_day", _sc["max_fires"])
             s_time_stop = slot.get("time_stop_bars", exit_cfg["max_hold_bars"])
+            s_force_exit = _sc["force_exit_min"]
+            s_unified    = _sc["unified_window"]
+            s_entry_start  = _sc["entry_start"]
+            s_entry_cutoff = _sc["entry_cutoff"]
 
-            if s_session == "morning" and not is_morning:
-                continue
-            if s_session == "afternoon" and not is_afternoon:
-                continue
+            # Per-strategy session window check
+            if s_unified:
+                if not (s_entry_start <= t_min <= s_entry_cutoff):
+                    continue
+            else:
+                s_morning   = s_entry_start <= t_min <= morning_end
+                s_afternoon = afternoon_start <= t_min <= s_entry_cutoff
+                if s_session == "morning" and not s_morning:
+                    continue
+                if s_session == "afternoon" and not s_afternoon:
+                    continue
+                if not (s_morning or s_afternoon):
+                    continue
+
             if daily_fires.get(s_name, 0) >= s_max_fires:
                 continue
 
             # Per-strategy bias check
             s_bias_cache = strategy_bias_caches.get(s_name, [])
             s_bias = s_bias_cache[n5 - 1] if n5 - 1 < len(s_bias_cache) else None
-            s_mode = slot.get("mode", "independent")
-            # Also check per-strategy bias_config mode
+            # Bias active when cache was built with bias filters (non-None entries exist).
+            # Use the same rule as cache construction: bias_cfg.mode or slot.mode.
             s_bias_cfg = slot.get("bias_config") or bias_cfg
-            if s_bias_cfg.get("mode") == "bias_filtered" or s_mode == "bias_filtered":
+            s_bias_mode = s_bias_cfg.get("mode", slot.get("mode", "independent"))
+            if s_bias_mode == "bias_filtered":
                 if not s_bias:
                     continue
             if s_concurrent:
@@ -732,15 +780,18 @@ def run(config: dict) -> dict:
                 continue
 
             # Signal must align with this strategy's bias direction
-            if (s_bias_cfg.get("mode") == "bias_filtered" or s_mode == "bias_filtered") and s_bias and sig_dir != s_bias:
+            if s_bias_mode == "bias_filtered" and s_bias and sig_dir != s_bias:
                 continue
 
             slip = exit_cfg["slippage_pts"]
             entry = float(price) + (slip if sig_dir == "BUY" else -slip)
             s_params = slot.get("params", {})
             strategy_sl_cap = s_params.get("max_sl_points", sl_cap)
-            sl_dist = min(exit_cfg["sl_atr_mult"] * atr, strategy_sl_cap)
-            tp_dist = exit_cfg["tp_atr_mult"] * atr
+            # Per-slot exit multipliers take priority over global exit_cfg
+            _sl_mult = slot.get("sl_atr_mult", exit_cfg["sl_atr_mult"])
+            _tp_mult = slot.get("tp_atr_mult", exit_cfg["tp_atr_mult"])
+            sl_dist = min(_sl_mult * atr, strategy_sl_cap)
+            tp_dist = _tp_mult * atr
 
             if sig_dir == "BUY":
                 sl, tp = entry - sl_dist, entry + tp_dist
@@ -751,7 +802,7 @@ def run(config: dict) -> dict:
                 "direction": sig_dir, "entry_price": entry,
                 "sl": sl, "tp": tp, "entry_bar": i, "entry_ts": float(ts),
                 "strategy": s_name, "atr": atr, "bias": s_bias,
-                "max_hold": s_time_stop,
+                "max_hold": s_time_stop, "force_exit_min": s_force_exit,
             }
 
             # Compute exit immediately (vectorized, O(max_hold))
@@ -837,6 +888,12 @@ def run(config: dict) -> dict:
             "session": s.get("session", "all"),
             "max_fires_per_day": s.get("max_fires_per_day", 5),
             "time_stop_bars": s.get("time_stop_bars", 20),
+            "exit_config": {
+                "sl_atr_mult":   s.get("sl_atr_mult",   exit_cfg["sl_atr_mult"]),
+                "tp_atr_mult":   s.get("tp_atr_mult",   exit_cfg["tp_atr_mult"]),
+                "max_hold_bars": s.get("max_hold_bars",  exit_cfg["max_hold_bars"]),
+                "slippage_pts":  exit_cfg["slippage_pts"],
+            },
         })
 
     from .reporting import build_full_result

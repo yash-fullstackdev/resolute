@@ -358,6 +358,8 @@ FILTER_EVALUATORS: dict[str, Any] = {
 }
 
 VALID_FILTER_TYPES = frozenset(FILTER_EVALUATORS.keys())
+# Strategy-instance bias is handled separately (not in FILTER_EVALUATORS)
+STRATEGY_INSTANCE_TYPE = "strategy_instance"
 
 
 # ── BiasEvaluator ─────────────────────────────────────────────────────────────
@@ -373,7 +375,7 @@ class BiasEvaluator:
       {
         "bias_filters": [
           {"type": "ema_crossover", "timeframe": 5, "params": {"short": 2, "long": 11}},
-          {"type": "supertrend", "timeframe": 5, "params": {"period": 10, "multiplier": 3.0}},
+          {"type": "strategy_instance", "timeframe": 5, "params": {"strategy_name": "ema_breakdown"}},
         ],
         "min_agreement": 2,
         "mode": "bias_filtered"  # or "independent"
@@ -381,24 +383,34 @@ class BiasEvaluator:
     """
 
     def __init__(self, bias_config: dict):
-        self.filters: list[dict] = bias_config.get("bias_filters", [])
+        raw_filters: list[dict] = bias_config.get("bias_filters", [])
         self.min_agreement: int = int(bias_config.get("min_agreement", 2))
         self.mode: str = bias_config.get("mode", "independent")
 
-        # Validate filter types
-        self.filters = [f for f in self.filters if f.get("type") in VALID_FILTER_TYPES]
+        # Accept both indicator types and strategy_instance type
+        self.filters: list[dict] = [
+            f for f in raw_filters
+            if f.get("type") in VALID_FILTER_TYPES or f.get("type") == STRATEGY_INSTANCE_TYPE
+        ]
 
     @property
     def is_active(self) -> bool:
         """True if this evaluator actually filters signals."""
         return self.mode == "bias_filtered" and len(self.filters) > 0
 
-    def get_current_bias(self, candle_data_5m: dict, candle_data_1m: dict | None = None) -> str | None:
+    def get_current_bias(
+        self,
+        candle_data_5m: dict,
+        candle_data_1m: dict | None = None,
+        live_strategy_signals: dict[str, int] | None = None,
+    ) -> str | None:
         """Evaluate bias at the CURRENT (last) bar.
 
         Args:
             candle_data_5m: dict with numpy arrays (close, high, low, timestamp)
             candle_data_1m: optional 1m candles for sub-5m timeframe filters
+            live_strategy_signals: optional dict mapping instance_name → int (+1/-1/0)
+                                   used when filter type is "strategy_instance"
 
         Returns: "BUY", "SELL", or None (no clear bias)
         """
@@ -419,9 +431,21 @@ class BiasEvaluator:
 
         for filt in self.filters:
             ftype = filt.get("type", "")
-            tf = int(filt.get("timeframe", 5))
             params = filt.get("params", {})
 
+            # ── strategy_instance bias (uses live signal from another instance) ──
+            if ftype == STRATEGY_INSTANCE_TYPE:
+                if live_strategy_signals:
+                    # Prefer instance_name (live path); fall back to strategy_name (backtest compat)
+                    ref_name = str(params.get("instance_name") or params.get("strategy_name", ""))
+                    sig = int(live_strategy_signals.get(ref_name, 0))
+                    if sig == 1:
+                        votes_buy += 1
+                    elif sig == -1:
+                        votes_sell += 1
+                continue
+
+            tf = int(filt.get("timeframe", 5))
             evaluator_fn = FILTER_EVALUATORS.get(ftype)
             if evaluator_fn is None:
                 continue
@@ -463,8 +487,17 @@ class BiasEvaluator:
             return "SELL"
         return None
 
-    def precompute_bias_array(self, data_1m: dict) -> tuple[list, list]:
+    def precompute_bias_array(
+        self,
+        data_1m: dict,
+        precomputed_signals: dict[str, Any] | None = None,
+    ) -> tuple[list, list]:
         """Batch-compute bias for ALL 5m bars at once (backtest mode).
+
+        Args:
+            data_1m: raw 1m candle data
+            precomputed_signals: optional dict mapping strategy_name → np.ndarray (int8)
+                                 used when filter type is "strategy_instance"
 
         Returns: (bias_cache, atr_cache) where each is a list of length n_5m_bars.
         """
@@ -498,9 +531,25 @@ class BiasEvaluator:
         all_dirs = []
         for filt in self.filters:
             ftype = filt.get("type", "")
-            tf = int(filt.get("timeframe", 5))
             params = filt.get("params", {})
 
+            # ── strategy_instance bias (uses precomputed signal array) ──────────
+            if ftype == STRATEGY_INSTANCE_TYPE:
+                if precomputed_signals:
+                    ref_name = str(params.get("strategy_name", ""))
+                    sig_arr = precomputed_signals.get(ref_name)
+                    if sig_arr is not None and len(sig_arr) > 0:
+                        # Align to n_primary bars
+                        arr = np.asarray(sig_arr, dtype=np.int8)
+                        if len(arr) >= n_primary:
+                            all_dirs.append(arr[:n_primary])
+                        else:
+                            padded = np.zeros(n_primary, dtype=np.int8)
+                            padded[:len(arr)] = arr
+                            all_dirs.append(padded)
+                continue
+
+            tf = int(filt.get("timeframe", 5))
             evaluator_fn = FILTER_EVALUATORS.get(ftype)
             if evaluator_fn is None:
                 continue
