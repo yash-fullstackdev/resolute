@@ -19,6 +19,7 @@ type BrokerClient interface {
 // OrderLeg represents a single leg of a multi-leg order.
 type OrderLeg struct {
 	Symbol         string   `json:"symbol"`
+	SecurityID     string   `json:"security_id,omitempty"`
 	Exchange       string   `json:"exchange"`        // "NSE" | "NFO" | "MCX"
 	InstrumentType string   `json:"instrument_type"` // "CE" | "PE" | "FUT"
 	Strike         float64  `json:"strike"`

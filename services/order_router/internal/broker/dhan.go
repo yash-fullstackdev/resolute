@@ -210,6 +210,11 @@ func (d *DhanClient) doPlaceOrder(ctx context.Context, leg OrderLeg, totalQty in
 		return "", fmt.Errorf("rate limiter: %w", err)
 	}
 
+	securityID := leg.Symbol
+	if leg.SecurityID != "" {
+		securityID = leg.SecurityID
+	}
+
 	req := dhanOrderRequest{
 		DhanClientID:    d.clientID,
 		TransactionType: leg.Action,
@@ -218,7 +223,7 @@ func (d *DhanClient) doPlaceOrder(ctx context.Context, leg OrderLeg, totalQty in
 		OrderType:       orderType,
 		Validity:        "DAY",
 		TradingSymbol:   leg.Symbol,
-		SecurityID:      leg.Symbol, // In production, map symbol to security ID
+		SecurityID:      securityID,
 		Quantity:        totalQty,
 		Price:           price,
 		DisclosedQty:    0,
