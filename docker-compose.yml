@@ -13,7 +13,7 @@ services:
     ports:
       - "4222:4222"
       - "8222:8222"   # monitoring
-    command: ["-js", "-m", "8222"]
+    command: ["-js", "-m", "8222", "--max_payload", "8388608"]
     restart: unless-stopped
     networks:
       - options-net
@@ -253,6 +253,35 @@ services:
         limits:
           memory: 512M
           cpus: "1.00"
+
+  # ── Equity Poller ────────────────────────────────────────────────────────────
+
+  equity_poller:
+    build:
+      context: ./services/equity_poller
+    depends_on:
+      timescaledb:
+        condition: service_healthy
+      nats:
+        condition: service_healthy
+    environment:
+      - NATS_URL=nats://nats:4222
+      - DATABASE_URL=postgresql://postgres:postgres@timescaledb:5432/resolute
+      - DHAN_BASE_URL=https://api.dhan.co/v2
+      - DHAN_ACCESS_TOKEN=${DHAN_ACCESS_TOKEN:-}
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8081/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: "1.0"
+    restart: unless-stopped
+    networks:
+      - options-net
 
   # ── Frontend ─────────────────────────────────────────────────────────────────
 
