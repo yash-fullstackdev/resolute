@@ -45,9 +45,26 @@ def list_strategy_names() -> list[str]:
     return list(STRATEGY_REGISTRY.keys())
 
 
+# ---------------------------------------------------------------------------
+# Equity (cash segment) strategy registry — separate evaluation path
+# ---------------------------------------------------------------------------
+
+from .early_momentum import EarlyMomentumStrategy
+
+EQUITY_STRATEGY_REGISTRY: dict[str, type] = {
+    "early_momentum": EarlyMomentumStrategy,
+}
+
+
+def get_equity_strategy_class(name: str):
+    return EQUITY_STRATEGY_REGISTRY.get(name)
+
+
 __all__ = [
     "STRATEGY_REGISTRY",
+    "EQUITY_STRATEGY_REGISTRY",
     "get_strategy_class",
+    "get_equity_strategy_class",
     "list_strategy_names",
     "BaseStrategy",
 ]

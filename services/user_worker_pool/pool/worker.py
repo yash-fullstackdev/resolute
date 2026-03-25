@@ -235,9 +235,39 @@ class UserWorker:
                 max_daily_loss_pts=inst_cfg.max_daily_loss_pts,
             ))
 
+        # Build equity strategy instances (separate evaluation path)
+        self._equity_instances: list[StrategyInstance] = []
+        for inst_cfg in config.instances:
+            if inst_cfg.mode == "disabled":
+                continue
+            from ..strategies import get_equity_strategy_class
+            eq_cls = get_equity_strategy_class(inst_cfg.strategy_name)
+            if eq_cls is not None:
+                strat = eq_cls()
+                merged = {**getattr(strat, 'DEFAULT_CONFIG', {}), **(inst_cfg.params or {})}
+                self._equity_instances.append(StrategyInstance(
+                    instance_id=inst_cfg.instance_id,
+                    instance_name=inst_cfg.instance_name or inst_cfg.strategy_name,
+                    strategy=strat,
+                    config=merged,
+                    instruments=inst_cfg.instruments,
+                    bias_evaluator=None,
+                    session=inst_cfg.session,
+                    mode=inst_cfg.mode,
+                    max_daily_loss_pts=inst_cfg.max_daily_loss_pts,
+                ))
+
+        # Per-instance snapshot history for equity (accumulates across cycles within a day)
+        self._equity_snapshot_history: dict[str, dict[str, list]] = {}  # instance_id -> {symbol -> [snapshots]}
+        # Per-instance open equity positions
+        self._equity_open_positions: dict[str, dict[str, object]] = {}  # instance_id -> {symbol -> EquityPosition}
+        # Per-instance fired today tracking
+        self._equity_fired_today: dict[str, set] = {}  # instance_id -> {symbol_direction}
+
         self._log.info(
             "instances_loaded",
             total=len(self._instances),
+            equity=len(self._equity_instances),
             live=[i.instance_name for i in self._instances if i.mode == "live"],
             paper=[i.instance_name for i in self._instances if i.mode == "paper"],
         )
@@ -286,6 +316,12 @@ class UserWorker:
             cb=self._on_override_message,
         )
         self._subs.append(sub_overrides)
+
+        # Subscribe to equity batch snapshots (from equity_poller)
+        if self._equity_instances:
+            sub_eq = await self._nats.subscribe("equity.snapshots.batch", cb=self._on_equity_batch)
+            self._subs.append(sub_eq)
+            self._log.info("equity_batch_subscribed", instances=len(self._equity_instances))
 
         self._log.info("worker_started", instances=len(self._instances))
 
@@ -1205,6 +1241,236 @@ class UserWorker:
         )
 
     # ------------------------------------------------------------------
+    # Equity batch handler (early momentum & future equity strategies)
+    # ------------------------------------------------------------------
+
+    async def _on_equity_batch(self, msg):
+        """Handle equity.snapshots.batch NATS message."""
+        t0 = time.monotonic()
+
+        # Circuit breaker — absolute, no bypass
+        if self.discipline.circuit_breaker.is_user_halted(self.tenant_id):
+            return
+
+        try:
+            batch = json.loads(msg.data)
+        except Exception:
+            return
+
+        bucket = batch.get("bucket", 0)
+        trading_date = batch.get("trading_date", "")
+        stocks = batch.get("stocks", [])
+        batch_ts = batch.get("timestamp", 0)
+
+        self._log.debug(
+            "equity_batch_received", bucket=bucket, stocks=len(stocks),
+            receive_lag_ms=round((time.time() - batch_ts) * 1000, 1) if batch_ts else 0,
+        )
+
+        snap_map = {s["symbol"]: s for s in stocks}
+
+        for inst in self._equity_instances:
+            inst_id = inst.instance_id
+            cfg = inst.config
+
+            # Initialize per-instance tracking if needed
+            if inst_id not in self._equity_snapshot_history:
+                self._equity_snapshot_history[inst_id] = {}
+                self._equity_open_positions[inst_id] = {}
+                self._equity_fired_today[inst_id] = set()
+
+            # Daily reset check
+            if hasattr(inst, '_last_eq_date') and inst._last_eq_date != trading_date:
+                self._equity_snapshot_history[inst_id] = {}
+                self._equity_fired_today[inst_id] = set()
+                self._equity_open_positions[inst_id] = {}
+            inst._last_eq_date = trading_date
+
+            user_instruments = cfg.get("instruments", [])
+            history = self._equity_snapshot_history[inst_id]
+            fired = self._equity_fired_today[inst_id]
+            open_pos = self._equity_open_positions[inst_id]
+
+            for symbol in user_instruments:
+                snap = snap_map.get(symbol)
+                if not snap:
+                    continue
+
+                # Accumulate history
+                if symbol not in history:
+                    history[symbol] = []
+                history[symbol].append(snap)
+
+                # Evaluate both directions
+                for direction in ("BUY", "SELL"):
+                    signal = inst.strategy.evaluate_signal(
+                        snap, bucket, direction, cfg,
+                        fired, open_pos,
+                        snapshot_history=history.get(symbol, []),
+                    )
+                    if signal is None:
+                        continue
+
+                    # Mark as fired
+                    fired.add(f"{symbol}_{direction}")
+
+                    # FIRE ORDER IMMEDIATELY
+                    t_order = time.monotonic()
+                    await self._publish_equity_order(inst, signal)
+                    order_ms = (time.monotonic() - t_order) * 1000
+
+                    self._log.info(
+                        "equity_signal_fired",
+                        symbol=signal.symbol, direction=signal.direction,
+                        bucket=bucket, score=signal.score,
+                        signals_fired=signal.signals_fired,
+                        entry_price=signal.entry_price,
+                        gap_pct=signal.gap_pct, move_pct=signal.move_pct,
+                        vol_rate=signal.vol_rate, quantity=signal.quantity,
+                        tp_price=signal.tp_price, sl_price=signal.sl_price,
+                        order_publish_ms=round(order_ms, 2),
+                    )
+
+                    # Track open position
+                    from ..strategies.equity_base import EquityPosition
+                    open_pos[symbol] = EquityPosition(
+                        symbol=signal.symbol, security_id=signal.security_id,
+                        direction=signal.direction, entry_price=signal.entry_price,
+                        entry_bucket=signal.entry_bucket, quantity=signal.quantity,
+                        tp_price=signal.tp_price, sl_price=signal.sl_price,
+                        hard_exit_bucket=signal.hard_exit_bucket,
+                    )
+
+                    # PERSIST ASYNC
+                    asyncio.create_task(self._persist_equity_signal(inst, signal))
+
+            # EXIT CHECKS for open positions
+            for sym, pos in list(open_pos.items()):
+                snap = snap_map.get(sym)
+                if not snap:
+                    continue
+
+                exit_result = inst.strategy.check_exit(pos, snap, bucket, cfg)
+                if exit_result is not None:
+                    t_exit = time.monotonic()
+                    await self._publish_equity_exit_order(inst, pos, exit_result)
+                    exit_ms = (time.monotonic() - t_exit) * 1000
+
+                    self._log.info(
+                        "equity_exit_fired",
+                        symbol=sym, direction=pos.direction,
+                        bucket=bucket, reason=exit_result.reason,
+                        entry_price=pos.entry_price, exit_price=exit_result.exit_price,
+                        pnl_rupees=round(exit_result.pnl_rupees, 2),
+                        return_pct=round(exit_result.return_pct, 4),
+                        hold_buckets=bucket - pos.entry_bucket,
+                        exit_order_ms=round(exit_ms, 2),
+                    )
+
+                    del open_pos[sym]
+                    asyncio.create_task(self._persist_equity_exit(inst, pos, exit_result))
+
+        total_ms = (time.monotonic() - t0) * 1000
+        self._log.debug("equity_batch_complete", bucket=bucket, total_ms=round(total_ms, 2))
+
+    async def _publish_equity_order(self, inst, signal) -> None:
+        """Publish equity entry order to order_router via NATS."""
+        order = {
+            "id": str(uuid.uuid4()),
+            "tenant_id": self.tenant_id,
+            "signal_id": str(uuid.uuid4()),
+            "strategy_name": "early_momentum",
+            "underlying": signal.symbol,
+            "legs": [{
+                "symbol": signal.symbol,
+                "security_id": signal.security_id,
+                "exchange": "NSE",
+                "action": signal.direction,
+                "quantity": signal.quantity,
+                "product": "MIS",
+                "order_type": "MARKET",
+                "price": 0.0,
+            }],
+            "max_loss_inr": signal.entry_price * signal.quantity * 0.02,
+            "target_profit_inr": (
+                abs(signal.tp_price - signal.entry_price) * signal.quantity
+                if signal.tp_price != signal.entry_price
+                else signal.entry_price * signal.quantity * 0.01
+            ),
+            "stop_loss_pct": (
+                abs(signal.sl_price - signal.entry_price) / signal.entry_price * 100
+                if signal.sl_price != signal.entry_price
+                else 1.0
+            ),
+            "time_stop": _bucket_to_iso(signal.hard_exit_bucket),
+        }
+        subject = f"orders.new.validated.{self.tenant_id}"
+        await self._nats.publish(subject, json.dumps(order).encode())
+
+    async def _publish_equity_exit_order(self, inst, pos, exit_result) -> None:
+        """Publish equity exit (reverse direction) order to order_router via NATS."""
+        reverse_dir = "SELL" if pos.direction == "BUY" else "BUY"
+        order = {
+            "id": str(uuid.uuid4()),
+            "tenant_id": self.tenant_id,
+            "strategy_name": "early_momentum",
+            "underlying": pos.symbol,
+            "order_type": "EXIT",
+            "exit_reason": exit_result.reason,
+            "legs": [{
+                "symbol": pos.symbol,
+                "security_id": pos.security_id,
+                "exchange": "NSE",
+                "action": reverse_dir,
+                "quantity": pos.quantity,
+                "product": "MIS",
+                "order_type": "MARKET",
+                "price": 0.0,
+            }],
+            "time_stop": _bucket_to_iso(pos.hard_exit_bucket),
+        }
+        subject = f"orders.new.validated.{self.tenant_id}"
+        await self._nats.publish(subject, json.dumps(order).encode())
+
+    async def _persist_equity_signal(self, inst, signal) -> None:
+        """Persist equity signal to DB (fire-and-forget)."""
+        try:
+            if self._db is None:
+                return
+            await self._db.execute(
+                """INSERT INTO equity_signals
+                   (tenant_id, instance_id, symbol, security_id, direction,
+                    entry_price, entry_bucket, score, signals_fired, quantity,
+                    tp_price, sl_price, hard_exit_bucket, gap_pct, move_pct, vol_rate, open_price)
+                   VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)""",
+                self.tenant_id, inst.instance_id, signal.symbol, signal.security_id,
+                signal.direction, signal.entry_price, signal.entry_bucket,
+                signal.score, signal.signals_fired, signal.quantity,
+                signal.tp_price, signal.sl_price, signal.hard_exit_bucket,
+                signal.gap_pct, signal.move_pct, signal.vol_rate, signal.open_price,
+            )
+        except Exception as exc:
+            self._log.error("equity_signal_persist_error", error=str(exc), symbol=signal.symbol)
+
+    async def _persist_equity_exit(self, inst, pos, exit_result) -> None:
+        """Persist equity exit to DB (fire-and-forget)."""
+        try:
+            if self._db is None:
+                return
+            await self._db.execute(
+                """INSERT INTO equity_exits
+                   (tenant_id, instance_id, symbol, direction, entry_price,
+                    exit_price, exit_bucket, exit_reason, return_pct, pnl_rupees, quantity)
+                   VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)""",
+                self.tenant_id, inst.instance_id, pos.symbol, pos.direction,
+                pos.entry_price, exit_result.exit_price, exit_result.exit_bucket,
+                exit_result.reason, exit_result.return_pct, exit_result.pnl_rupees,
+                pos.quantity,
+            )
+        except Exception as exc:
+            self._log.error("equity_exit_persist_error", error=str(exc), symbol=pos.symbol)
+
+    # ------------------------------------------------------------------
     # Regime classification
     # ------------------------------------------------------------------
 
@@ -1254,6 +1520,23 @@ class UserWorker:
             elif trend == "BEAR":
                 return _Regime("BEAR_LOW_VOL")
             return _Regime("SIDEWAYS_LOW_VOL")
+
+
+def _bucket_to_iso(bucket: int) -> str:
+    """Convert bucket number to today's ISO timestamp string.
+
+    Bucket 1 = 9:15 IST, bucket 2 = 9:16 IST, etc.
+    Returns ISO format with +05:30 offset.
+    """
+    from datetime import date as _date, timedelta, timezone as _tz
+    ist = _tz(timedelta(hours=5, minutes=30))
+    today = datetime.now(ist).date()
+    # bucket 1 = 9:15, so offset = bucket - 1 minutes from 9:15
+    minutes_from_open = bucket - 1
+    hour = 9 + (15 + minutes_from_open) // 60
+    minute = (15 + minutes_from_open) % 60
+    dt = datetime(today.year, today.month, today.day, hour, minute, 0, tzinfo=ist)
+    return dt.isoformat()
 
 
 # Bidirectional symbol aliases — maps between different naming conventions
