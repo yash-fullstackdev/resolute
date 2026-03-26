@@ -19,6 +19,7 @@ from .smc_order_block import SMCOrderBlockStrategy
 from .brahmaastra import BrahmaastraStrategy
 from .ema5_mean_reversion import EMA5MeanReversionStrategy
 from .parent_child_momentum import ParentChildMomentumStrategy
+from .nifty_scalper import NiftyScalperStrategy
 
 STRATEGY_REGISTRY: dict[str, type[BaseStrategy]] = {
     "ttm_squeeze": TTMSqueezeStrategy,
@@ -34,6 +35,8 @@ STRATEGY_REGISTRY: dict[str, type[BaseStrategy]] = {
     "ema5_mean_reversion": EMA5MeanReversionStrategy,
     # S3 — 1H parent + 5m child dual-TF momentum
     "parent_child_momentum": ParentChildMomentumStrategy,
+    # S4 — 1m scalper with 6 candle-pattern scoring
+    "nifty_scalper": NiftyScalperStrategy,
 }
 
 

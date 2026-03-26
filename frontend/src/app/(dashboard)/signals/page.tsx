@@ -147,7 +147,49 @@ export default function SignalsPage() {
         </div>
       )}
 
-      {/* Historical Signals */}
+      {/* Summary Stats */}
+      {allSignals.length > 0 && (
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+          {(() => {
+            const today = new Date().toISOString().slice(0, 10);
+            const todaySignals = allSignals.filter((s) => s.created_at?.startsWith(today));
+            const buys = todaySignals.filter((s) => s.direction === "BULLISH" || s.direction === "BUY" || s.direction === "BUY_CALL");
+            const sells = todaySignals.filter((s) => !buys.includes(s));
+            const withPnl = todaySignals.filter((s) => s.live_pnl != null);
+            const totalPnl = withPnl.reduce((sum, s) => sum + (s.live_pnl ?? 0), 0);
+            return (
+              <>
+                <div className="rounded-lg border border-surface-border bg-surface p-3 text-center">
+                  <p className="text-[10px] text-slate-500">Today&apos;s Signals</p>
+                  <p className="text-lg font-bold text-white">{todaySignals.length}</p>
+                </div>
+                <div className="rounded-lg border border-surface-border bg-surface p-3 text-center">
+                  <p className="text-[10px] text-slate-500">BUY / SELL</p>
+                  <p className="text-lg font-bold">
+                    <span className="text-profit">{buys.length}</span>
+                    <span className="text-slate-600"> / </span>
+                    <span className="text-loss">{sells.length}</span>
+                  </p>
+                </div>
+                <div className="rounded-lg border border-surface-border bg-surface p-3 text-center">
+                  <p className="text-[10px] text-slate-500">Net P&L</p>
+                  <p className={`text-lg font-bold tabular-nums ${totalPnl >= 0 ? "text-profit" : "text-loss"}`}>
+                    {totalPnl >= 0 ? "+" : ""}{totalPnl.toFixed(1)} pts
+                  </p>
+                </div>
+                <div className="rounded-lg border border-surface-border bg-surface p-3 text-center">
+                  <p className="text-[10px] text-slate-500">Strategies</p>
+                  <p className="text-lg font-bold text-white">
+                    {new Set(todaySignals.map((s) => s.strategy_name)).size}
+                  </p>
+                </div>
+              </>
+            );
+          })()}
+        </div>
+      )}
+
+      {/* Historical Signals — grouped by date */}
       <div>
         <h2 className="text-sm font-semibold text-white mb-3">Signal History</h2>
         {isLoading ? (
@@ -155,10 +197,35 @@ export default function SignalsPage() {
             <div className="h-6 w-6 animate-spin rounded-full border-2 border-accent border-t-transparent" />
           </div>
         ) : allSignals.length > 0 ? (
-          <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
-            {allSignals.map((signal) => (
-              <SignalCard key={signal.id} signal={signal} />
-            ))}
+          <div className="space-y-4">
+            {(() => {
+              // Group by date
+              const grouped: Record<string, typeof allSignals> = {};
+              for (const s of allSignals) {
+                const dateKey = s.created_at?.slice(0, 10) ?? "unknown";
+                if (!grouped[dateKey]) grouped[dateKey] = [];
+                grouped[dateKey].push(s);
+              }
+              const today = new Date().toISOString().slice(0, 10);
+              return Object.entries(grouped)
+                .sort(([a], [b]) => b.localeCompare(a))
+                .map(([dateKey, signals]) => (
+                  <div key={dateKey}>
+                    <div className="flex items-center gap-2 mb-2">
+                      <Clock className="h-3.5 w-3.5 text-slate-600" />
+                      <span className="text-xs font-semibold text-slate-400">
+                        {dateKey === today ? "Today" : dateKey}
+                      </span>
+                      <span className="text-[10px] text-slate-600">{signals.length} signal{signals.length > 1 ? "s" : ""}</span>
+                    </div>
+                    <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
+                      {signals.map((signal) => (
+                        <SignalCard key={signal.id} signal={signal} />
+                      ))}
+                    </div>
+                  </div>
+                ));
+            })()}
           </div>
         ) : (
           <div className="flex h-32 items-center justify-center rounded-xl border border-dashed border-surface-border">

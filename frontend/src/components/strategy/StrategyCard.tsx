@@ -97,11 +97,16 @@ export function StrategyCard({
 
               {/* Info Row */}
               <div className="mt-2 flex flex-wrap items-center gap-1.5">
-                {inst.instruments.length > 0 && inst.instruments.map((sym) => (
+                {inst.instruments.length > 0 && inst.instruments.slice(0, 4).map((sym) => (
                   <span key={sym} className="rounded-md bg-surface-dark px-2 py-0.5 text-[10px] font-medium text-slate-300">
                     {sym}
                   </span>
                 ))}
+                {inst.instruments.length > 4 && (
+                  <span className="rounded-md bg-accent/10 px-2 py-0.5 text-[10px] font-semibold text-accent-light" title={inst.instruments.slice(4).join(", ")}>
+                    +{inst.instruments.length - 4}
+                  </span>
+                )}
                 <span className="rounded-md bg-surface-dark/50 px-2 py-0.5 text-[10px] text-slate-500">
                   {SESSION_SHORT[inst.session] ?? inst.session}
                 </span>

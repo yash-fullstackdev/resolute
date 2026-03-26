@@ -61,5 +61,5 @@ tests/backtest/data/*.parquet
 *.log
 logs/
 
-
+SKILL.md
 *.json

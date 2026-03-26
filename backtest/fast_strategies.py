@@ -913,6 +913,150 @@ def get_strategy_exit_defaults(strategy_name: str) -> dict:
     return {**_DEFAULT_EXIT, **STRATEGY_EXIT_DEFAULTS.get(strategy_name, {})}
 
 
+# ── Nifty Scalper (5m bars, 4 candle-pattern detectors) ──────────────────────
+
+def precompute_nifty_scalper(closes, highs, lows, opens=None, params=None):
+    """Score-based NIFTY scalper on 5m bars.
+
+    Reverse-engineered from big-move analysis (nifty_reverse_engineer.py):
+    Finds what precedes 20pt+ moves and uses those setups as entries.
+
+    5 patterns (on 5m bars — thresholds scaled for 5m timeframe):
+    1. Narrow consolidation breakout (5-bar range < consolidation_range, then expansion)
+    2. Strong bar + level break (body > min_body, breaks 5-bar high/low)
+    3. Engulfing + level break (engulfs prev bar AND breaks 5-bar level)
+    4. Momentum burst (3 strong directional bars)
+    5. Micro pullback in trend (trend, 1-bar dip, continuation)
+
+    Close-near-extreme filter: bullish bar close > 75% of range (strong close).
+    Optional same-direction-as-prev-bar filter for confirmation.
+
+    Returns np.int8 array of same length as *closes*.
+    """
+    if opens is None:
+        opens = closes
+    params = params or {}
+
+    # Pattern weights
+    consolidation_weight = int(params.get("consolidation_weight", 4))
+    level_break_weight   = int(params.get("level_break_weight", 3))
+    engulfing_weight     = int(params.get("engulfing_weight", 3))
+    momentum_weight      = int(params.get("momentum_burst_weight", 2))
+    pullback_weight      = int(params.get("micro_pullback_weight", 2))
+    min_score            = int(params.get("min_score", 3))
+
+    # Thresholds (already in 5m-appropriate units — user sets them for 5m)
+    consolidation_range  = float(params.get("consolidation_range", 30))   # max 5-bar range for "narrow"
+    min_body             = float(params.get("engulfing_min_body", 15))    # min bar body for signals
+    min_expansion_body   = float(params.get("min_expansion_body", 20))    # min body on breakout bar
+    pullback_trend_pts   = float(params.get("pullback_trend_pts", 30))    # min trend before pullback
+    momentum_min_range   = float(params.get("momentum_min_range", 10))    # min range per burst bar
+
+    n = len(closes)
+    signals = np.zeros(n, dtype=np.int8)
+
+    for i in range(6, n):
+        bull_score = 0
+        bear_score = 0
+
+        o_i = opens[i]
+        c_i = closes[i]
+        h_i = highs[i]
+        l_i = lows[i]
+        body_i = abs(c_i - o_i)
+        range_i = h_i - l_i
+        is_bull = c_i > o_i
+        is_bear = c_i < o_i
+
+        # Skip tiny bars
+        if range_i < 3 or body_i < 3:
+            continue
+
+        # Close-near-extreme check (strong close)
+        close_ratio_bull = (c_i - l_i) / range_i if range_i > 0 else 0
+        close_ratio_bear = (h_i - c_i) / range_i if range_i > 0 else 0
+        body_ratio = body_i / range_i if range_i > 0 else 0
+
+        # Previous bar
+        o_p = opens[i - 1]
+        c_p = closes[i - 1]
+        prev_bull = c_p > o_p
+        prev_bear = c_p < o_p
+
+        # 5-bar lookback levels
+        prev5_high = max(highs[j] for j in range(i - 5, i))
+        prev5_low  = min(lows[j] for j in range(i - 5, i))
+        prev5_range = prev5_high - prev5_low
+
+        # ── 1. NARROW CONSOLIDATION BREAKOUT (strongest pattern from analysis) ──
+        # 5 bars with range < consolidation_range, then strong directional bar breaks out
+        if prev5_range < consolidation_range and body_i >= min_expansion_body:
+            if is_bull and c_i > prev5_high and body_ratio > 0.5:
+                bull_score += consolidation_weight
+            elif is_bear and c_i < prev5_low and body_ratio > 0.5:
+                bear_score += consolidation_weight
+
+        # ── 2. STRONG BAR + LEVEL BREAK + SAME DIR PREV BAR ──
+        # Strong directional bar breaks 5-bar level, confirmed by prev bar direction
+        if body_i >= min_body:
+            if is_bull and prev_bull and c_i > prev5_high:
+                bull_score += level_break_weight
+            elif is_bear and prev_bear and c_i < prev5_low:
+                bear_score += level_break_weight
+
+        # ── 3. ENGULFING + LEVEL BREAK + CLOSE NEAR EXTREME ──
+        # Classic engulfing that also breaks a level — highest quality reversal
+        if body_i >= min_body:
+            top_i = max(o_i, c_i)
+            bot_i = min(o_i, c_i)
+            top_p = max(o_p, c_p)
+            bot_p = min(o_p, c_p)
+
+            if top_i > top_p and bot_i < bot_p:  # engulfs prev bar
+                if is_bull and c_i > prev5_high and close_ratio_bull > 0.7:
+                    bull_score += engulfing_weight
+                elif is_bear and c_i < prev5_low and close_ratio_bear > 0.7:
+                    bear_score += engulfing_weight
+
+        # ── 4. MOMENTUM BURST (3 consecutive strong bars) ──
+        if i >= 2:
+            all_bull_burst = True
+            all_bear_burst = True
+            for j in range(i - 2, i + 1):
+                bj = closes[j] - opens[j]
+                rj = highs[j] - lows[j]
+                abj = abs(bj)
+                if rj < momentum_min_range or abj < 0.5 * rj:
+                    all_bull_burst = False
+                    all_bear_burst = False
+                    break
+                if bj <= 0:
+                    all_bull_burst = False
+                if bj >= 0:
+                    all_bear_burst = False
+            if all_bull_burst:
+                bull_score += momentum_weight
+            elif all_bear_burst:
+                bear_score += momentum_weight
+
+        # ── 5. MICRO PULLBACK IN TREND ──
+        if i >= 5:
+            trend_move = closes[i - 2] - closes[i - 5]
+            if abs(trend_move) >= pullback_trend_pts:
+                if trend_move > 0 and prev_bear and is_bull and c_i > highs[i - 1]:
+                    bull_score += pullback_weight
+                elif trend_move < 0 and prev_bull and is_bear and c_i < lows[i - 1]:
+                    bear_score += pullback_weight
+
+        # ── FIRE SIGNAL ──
+        if bull_score >= min_score:
+            signals[i] = 1
+        elif bear_score >= min_score:
+            signals[i] = -1
+
+    return signals
+
+
 # ── Registry ─────────────────────────────────────────────────────────────────
 
 FAST_STRATEGY_MAP = {
@@ -928,6 +1072,7 @@ FAST_STRATEGY_MAP = {
     "brahmaastra":          None,
     "ema5_mean_reversion":  None,
     "parent_child_momentum": None,
+    "nifty_scalper": None,  # handled in precompute_strategy_signals
 }
 
 
@@ -990,6 +1135,13 @@ def precompute_strategy_signals(
         return precompute_parent_child(
             closes_5m, highs_5m, lows_5m,
             closes_1h,
+            params,
+        )
+
+    if strategy_name == "nifty_scalper":
+        return precompute_nifty_scalper(
+            closes_5m, highs_5m, lows_5m,
+            opens_5m if opens_5m is not None else closes_5m,
             params,
         )
 

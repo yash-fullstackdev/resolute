@@ -39,10 +39,15 @@ type DhanClient struct {
 
 // NewDhanClient creates a new Dhan broker client with per-user rate limiting.
 func NewDhanClient(creds BrokerCredentials, log zerolog.Logger) *DhanClient {
+	// For Dhan, the access token is stored as APIKey (user enters JWT in "Access Token" field)
+	token := creds.AccessToken
+	if token == "" {
+		token = creds.APIKey
+	}
 	return &DhanClient{
 		tenantID:    creds.TenantID,
 		apiKey:      creds.APIKey,
-		accessToken: creds.AccessToken,
+		accessToken: token,
 		clientID:    creds.ClientID,
 		httpClient: &http.Client{
 			Timeout: 10 * time.Second,
@@ -125,11 +130,15 @@ func (d *DhanClient) PlaceOrder(ctx context.Context, leg OrderLeg) (string, erro
 	d.log.Info().
 		Str("symbol", leg.Symbol).
 		Str("action", leg.Action).
-		Int("quantity", leg.Quantity*leg.LotSize).
+		Int("quantity", leg.Quantity).
+		Int("lot_size", leg.LotSize).
 		Str("order_type", leg.OrderType).
 		Msg("placing order")
 
 	totalQty := leg.Quantity * leg.LotSize
+	if leg.LotSize == 0 {
+		totalQty = leg.Quantity // Equity: quantity is shares directly, no lot multiplication
+	}
 	exchangeSegment := mapExchangeSegmentDhan(leg.Exchange)
 	product := mapProductTypeDhan(leg.Product)
 

@@ -216,6 +216,62 @@ def _map_watchlist(r: dict) -> dict:
     }
 
 
+@symbols_router.get("/equity-tiers")
+async def get_equity_tiers(request: Request):
+    """Get equity instruments grouped by tier for bulk selection (early momentum)."""
+    from ..db import async_session_factory
+
+    tiers: dict[str, list[str]] = {}
+    rows = []
+
+    # Try the equity_instruments table first (shared, no RLS).
+    try:
+        async with async_session_factory() as session:
+            result = await session.execute(
+                text(
+                    "SELECT symbol, security_id, tiers FROM equity_instruments "
+                    "WHERE enabled = true ORDER BY symbol"
+                )
+            )
+            rows = result.fetchall()
+    except Exception as exc:
+        logger.warning("equity_tiers_db_query_failed", error=str(exc))
+        rows = []
+
+    if rows:
+        for row in rows:
+            symbol = row[0]
+            row_tiers = row[2] or []
+            for tier in row_tiers:
+                tiers.setdefault(tier, []).append(symbol)
+        total = len({r[0] for r in rows})
+    else:
+        # Fallback: scrip master download — all symbols in a single "AllNSE" tier.
+        logger.info("equity_tiers_fallback_to_scrip_master")
+        equities = await _get_nse_equities()
+        symbols = [e["symbol"] for e in equities]
+        tiers = {"AllNSE": symbols}
+        total = len(symbols)
+
+    tier_counts = {k: len(v) for k, v in tiers.items()}
+    # Ensure consistent ordering of tier keys in the response.
+    ordered = ["F&O", "Nifty50", "Nifty500", "NSEActive", "AllNSE"]
+    ordered_tiers = {k: tiers[k] for k in ordered if k in tiers}
+    # Append any extra tiers not in the predefined order.
+    for k in tiers:
+        if k not in ordered_tiers:
+            ordered_tiers[k] = tiers[k]
+
+    return {
+        "success": True,
+        "data": {
+            "tiers": ordered_tiers,
+            "tier_counts": tier_counts,
+            "total": total,
+        },
+    }
+
+
 @router.get("")
 async def list_watchlists(request: Request):
     """List all watchlists for the authenticated tenant."""

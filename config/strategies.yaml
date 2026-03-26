@@ -276,6 +276,38 @@ ema5_mean_reversion:
 # 5m child (same indicators) provides tactical entry signal candle.
 # Buys 1–2 OTM CE or PE; profit target 25% premium; structural SL.
 # ──────────────────────────────────────────────────────────────────────────────
+nifty_scalper:
+  enabled: true
+  category: BUYING
+  min_capital_tier: STARTER
+  complexity: INTERMEDIATE
+  allowed_segments:
+    - NSE_INDEX
+  instruments:
+    - NIFTY
+    - BANKNIFTY
+  requires_margin: false
+  description: "1-minute scalper — scores 6 candle patterns (engulfing, pullback, momentum, inside bar, volume spike, PDC sniper), fires on confluence"
+  default_params:
+    volume_spike_weight: 5
+    pdc_sniper_weight: 4
+    engulfing_weight: 3
+    micro_pullback_weight: 3
+    momentum_burst_weight: 2
+    inside_bar_weight: 2
+    min_score: 3
+    engulfing_min_body: 10
+    engulfing_body_ratio: 0.6
+    pullback_trend_pts: 15
+    momentum_min_range: 5
+    inside_bar_min_range: 8
+    sl_points: 15
+    tp_points: 25
+    max_hold_minutes: 15
+    strike_selection: ATM
+    max_trades_per_day: 5
+    min_gap_between_trades: 3
+
 parent_child_momentum:
   enabled: true
   category: BUYING

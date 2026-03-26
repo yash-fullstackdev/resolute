@@ -3,6 +3,37 @@ import { getAccessToken } from "./auth";
 import { WS_URL } from "./constants";
 import type { Signal, Position } from "@/types/trading";
 
+export interface ChainRow {
+  strike: number;
+  call_ltp: number;
+  call_oi: number;
+  call_volume: number;
+  call_iv: number;
+  call_delta: number;
+  call_gamma: number;
+  call_theta: number;
+  call_vega: number;
+  call_bid: number;
+  call_ask: number;
+  put_ltp: number;
+  put_oi: number;
+  put_volume: number;
+  put_iv: number;
+  put_delta: number;
+  put_gamma: number;
+  put_theta: number;
+  put_vega: number;
+  put_bid: number;
+  put_ask: number;
+}
+
+export interface OptionChainData {
+  underlying: string;
+  expiry: string;
+  data: ChainRow[];
+  spot_price: number;
+}
+
 export type WSEvent =
   | { type: "TICK"; data: { symbol: string; last_price: number; change_pct: number } }
   | { type: "SIGNAL"; data: Signal }
@@ -13,7 +44,8 @@ export type WSEvent =
   | { type: "OVERRIDE_COOLDOWN_EXPIRED"; data: { override_id: string } }
   | { type: "DISCIPLINE_SCORE_UPDATE"; data: { score: number } }
   | { type: "WORKER_STATUS"; data: { status: "RUNNING" | "STOPPED" | "ERROR" } }
-  | { type: "ALERT"; data: { severity: string; message: string } };
+  | { type: "ALERT"; data: { severity: string; message: string } }
+  | { type: "OPTION_CHAIN"; data: OptionChainData };
 
 export type WSEventType = WSEvent["type"];
 
@@ -82,6 +114,18 @@ class WebSocketClient {
     return () => {
       handlerSet?.delete(wrappedHandler);
     };
+  }
+
+  subscribeChain(underlying: string, expiry: string): void {
+    if (this.socket?.connected) {
+      this.socket.emit("subscribe_chain", { underlying, expiry });
+    }
+  }
+
+  unsubscribeChain(): void {
+    if (this.socket?.connected) {
+      this.socket.emit("unsubscribe_chain");
+    }
   }
 
   get isConnected(): boolean {

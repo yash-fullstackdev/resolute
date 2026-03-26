@@ -117,35 +117,39 @@ func SyncScripMaster(ctx context.Context, pool *pgxpool.Pool, logger zerolog.Log
 		return 0, nil
 	}
 
-	tx, err := pool.Begin(ctx)
-	if err != nil {
-		return 0, fmt.Errorf("begin tx: %w", err)
-	}
-	defer tx.Rollback(ctx)
-
+	// Deduplicate by symbol (keep first security_id per symbol)
+	seen := make(map[string]bool)
+	upserted := 0
 	for _, inst := range instruments {
-		_, err := tx.Exec(ctx,
-			`INSERT INTO equity_instruments (security_id, symbol, company_name, exchange, segment, series, is_fno, updated_at)
-			 VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
+		if seen[inst.Symbol] {
+			continue
+		}
+		seen[inst.Symbol] = true
+
+		tiers := "{AllNSE,NSEActive}"
+		if inst.IsFnO {
+			tiers = "{AllNSE,NSEActive,F&O}"
+		}
+		// Each insert in its own implicit transaction (no batch tx)
+		// so one failure doesn't abort everything
+		_, err := pool.Exec(ctx,
+			`INSERT INTO equity_instruments (security_id, symbol, company_name, tiers, enabled, min_volume, updated_at)
+			 VALUES ($1, $2, $3, $4::text[], true, 0, NOW())
 			 ON CONFLICT (security_id) DO UPDATE SET
-				symbol = EXCLUDED.symbol,
 				company_name = EXCLUDED.company_name,
-				is_fno = EXCLUDED.is_fno,
+				tiers = EXCLUDED.tiers,
 				updated_at = NOW()`,
-			inst.SecurityID, inst.Symbol, inst.CompanyName,
-			inst.Exchange, inst.Segment, inst.Series, inst.IsFnO,
+			inst.SecurityID, inst.Symbol, inst.CompanyName, tiers,
 		)
 		if err != nil {
-			logger.Warn().Str("security_id", inst.SecurityID).Err(err).Msg("upsert instrument failed")
+			// Skip — likely symbol unique constraint conflict
+			continue
 		}
+		upserted++
 	}
 
-	if err := tx.Commit(ctx); err != nil {
-		return 0, fmt.Errorf("commit tx: %w", err)
-	}
-
-	logger.Info().Int("upserted", len(instruments)).Msg("equity_instruments sync complete")
-	return len(instruments), nil
+	logger.Info().Int("upserted", upserted).Int("total_parsed", len(instruments)).Msg("equity_instruments sync complete")
+	return upserted, nil
 }
 
 func getField(record []string, colIdx map[string]int, col string) string {

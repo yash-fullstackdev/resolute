@@ -1254,7 +1254,8 @@ class UserWorker:
 
         try:
             batch = json.loads(msg.data)
-        except Exception:
+        except Exception as exc:
+            self._log.error("equity_batch_parse_error", error=str(exc))
             return
 
         bucket = batch.get("bucket", 0)
@@ -1262,7 +1263,7 @@ class UserWorker:
         stocks = batch.get("stocks", [])
         batch_ts = batch.get("timestamp", 0)
 
-        self._log.debug(
+        self._log.info(
             "equity_batch_received", bucket=bucket, stocks=len(stocks),
             receive_lag_ms=round((time.time() - batch_ts) * 1000, 1) if batch_ts else 0,
         )
@@ -1286,7 +1287,7 @@ class UserWorker:
                 self._equity_open_positions[inst_id] = {}
             inst._last_eq_date = trading_date
 
-            user_instruments = cfg.get("instruments", [])
+            user_instruments = inst.instruments  # from StrategyInstance, NOT cfg (instruments popped from params)
             history = self._equity_snapshot_history[inst_id]
             fired = self._equity_fired_today[inst_id]
             open_pos = self._equity_open_positions[inst_id]
@@ -1303,11 +1304,16 @@ class UserWorker:
 
                 # Evaluate both directions
                 for direction in ("BUY", "SELL"):
-                    signal = inst.strategy.evaluate_signal(
-                        snap, bucket, direction, cfg,
-                        fired, open_pos,
-                        snapshot_history=history.get(symbol, []),
-                    )
+                    try:
+                        signal = inst.strategy.evaluate_signal(
+                            snap, bucket, direction, cfg,
+                            fired, open_pos,
+                            snapshot_history=history.get(symbol, []),
+                        )
+                    except Exception as exc:
+                        self._log.error("equity_eval_error", symbol=symbol, direction=direction,
+                                        bucket=bucket, error=str(exc), error_type=type(exc).__name__)
+                        continue
                     if signal is None:
                         continue
 
@@ -1371,7 +1377,7 @@ class UserWorker:
                     asyncio.create_task(self._persist_equity_exit(inst, pos, exit_result))
 
         total_ms = (time.monotonic() - t0) * 1000
-        self._log.debug("equity_batch_complete", bucket=bucket, total_ms=round(total_ms, 2))
+        self._log.info("equity_batch_complete", bucket=bucket, total_ms=round(total_ms, 2))
 
     async def _publish_equity_order(self, inst, signal) -> None:
         """Publish equity entry order to order_router via NATS."""
@@ -1413,10 +1419,9 @@ class UserWorker:
         order = {
             "id": str(uuid.uuid4()),
             "tenant_id": self.tenant_id,
+            "signal_id": str(uuid.uuid4()),
             "strategy_name": "early_momentum",
             "underlying": pos.symbol,
-            "order_type": "EXIT",
-            "exit_reason": exit_result.reason,
             "legs": [{
                 "symbol": pos.symbol,
                 "security_id": pos.security_id,
@@ -1427,45 +1432,102 @@ class UserWorker:
                 "order_type": "MARKET",
                 "price": 0.0,
             }],
+            "max_loss_inr": 0,
+            "target_profit_inr": 0,
+            "stop_loss_pct": 0,
             "time_stop": _bucket_to_iso(pos.hard_exit_bucket),
         }
         subject = f"orders.new.validated.{self.tenant_id}"
         await self._nats.publish(subject, json.dumps(order).encode())
 
     async def _persist_equity_signal(self, inst, signal) -> None:
-        """Persist equity signal to DB (fire-and-forget)."""
+        """Persist equity signal to signals table with metadata JSONB."""
         try:
             if self._db is None:
                 return
+            import json as _json
+            metadata = _json.dumps({
+                "entry_bucket": signal.entry_bucket,
+                "score": signal.score,
+                "signals_fired": signal.signals_fired,
+                "gap_pct": signal.gap_pct,
+                "move_pct": signal.move_pct,
+                "vol_rate": signal.vol_rate,
+                "open_price": signal.open_price,
+                "security_id": signal.security_id,
+                "quantity": signal.quantity,
+                "tp_price": signal.tp_price,
+                "sl_price": signal.sl_price,
+                "hard_exit_bucket": signal.hard_exit_bucket,
+                "instance_name": inst.instance_name,
+                "trading_mode": inst.mode,
+            })
+            direction = "BULLISH" if signal.direction == "BUY" else "BEARISH"
             await self._db.execute(
-                """INSERT INTO equity_signals
-                   (tenant_id, instance_id, symbol, security_id, direction,
-                    entry_price, entry_bucket, score, signals_fired, quantity,
-                    tp_price, sl_price, hard_exit_bucket, gap_pct, move_pct, vol_rate, open_price)
-                   VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)""",
-                self.tenant_id, inst.instance_id, signal.symbol, signal.security_id,
-                signal.direction, signal.entry_price, signal.entry_bucket,
-                signal.score, signal.signals_fired, signal.quantity,
-                signal.tp_price, signal.sl_price, signal.hard_exit_bucket,
-                signal.gap_pct, signal.move_pct, signal.vol_rate, signal.open_price,
+                """INSERT INTO signals
+                   (tenant_id, time, strategy, underlying, segment, direction,
+                    strength, legs, stop_loss_pct, rationale, metadata)
+                   VALUES ($1, NOW(), $2, $3, 'NSE_EQ', $4,
+                    $5, NULL, $6, $7, $8::jsonb)""",
+                self.tenant_id, "early_momentum", signal.symbol, direction,
+                float(signal.score), float(signal.sl_price),
+                f"Score {signal.score}: {','.join(signal.signals_fired)}",
+                metadata,
+            )
+            # Also create position record (store direction in legs JSONB)
+            import json as _json2
+            legs_json = _json2.dumps({"direction": signal.direction, "quantity": signal.quantity,
+                                       "security_id": signal.security_id})
+            await self._db.execute(
+                """INSERT INTO positions
+                   (tenant_id, strategy, underlying, segment, legs, entry_time,
+                    entry_cost_inr, stop_loss_price, target_price,
+                    time_stop, status)
+                   VALUES ($1, $2, $3, 'NSE_EQ', $4::jsonb, NOW(),
+                    $5, $6, $7, NOW() + interval '2 hours', 'OPEN')""",
+                self.tenant_id, "early_momentum", signal.symbol, legs_json,
+                float(signal.entry_price * signal.quantity),
+                float(signal.sl_price), float(signal.tp_price),
             )
         except Exception as exc:
             self._log.error("equity_signal_persist_error", error=str(exc), symbol=signal.symbol)
 
     async def _persist_equity_exit(self, inst, pos, exit_result) -> None:
-        """Persist equity exit to DB (fire-and-forget)."""
+        """Update position AND signal to closed."""
         try:
             if self._db is None:
                 return
+            exit_reason_map = {"TP": "TARGET_HIT", "SL": "STOP_HIT", "TIME": "TIME_STOP"}
+            status = exit_reason_map.get(exit_result.reason, "CLOSED")
+
+            # Update position
             await self._db.execute(
-                """INSERT INTO equity_exits
-                   (tenant_id, instance_id, symbol, direction, entry_price,
-                    exit_price, exit_bucket, exit_reason, return_pct, pnl_rupees, quantity)
-                   VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)""",
-                self.tenant_id, inst.instance_id, pos.symbol, pos.direction,
-                pos.entry_price, exit_result.exit_price, exit_result.exit_bucket,
-                exit_result.reason, exit_result.return_pct, exit_result.pnl_rupees,
-                pos.quantity,
+                """UPDATE positions SET
+                    status = $1, exit_time = NOW(),
+                    exit_value_inr = $2, realised_pnl_inr = $3,
+                    exit_reason = $4
+                   WHERE tenant_id = $5 AND strategy = 'early_momentum'
+                    AND underlying = $6 AND status = 'OPEN'""",
+                status, float(exit_result.exit_price * pos.quantity),
+                float(exit_result.pnl_rupees), exit_result.reason,
+                self.tenant_id, pos.symbol,
+            )
+
+            # Also update signal with exit data
+            await self._db.execute(
+                """UPDATE signals SET
+                    exit_price = $1, exit_time = NOW(),
+                    exit_reason = $2, realised_pnl = $3,
+                    acted_upon = true
+                   WHERE tenant_id = $4 AND strategy = 'early_momentum'
+                    AND underlying = $5
+                    AND exit_price IS NULL
+                    AND time = (SELECT MAX(time) FROM signals
+                                WHERE tenant_id = $4 AND strategy = 'early_momentum'
+                                AND underlying = $5 AND exit_price IS NULL)""",
+                float(exit_result.exit_price), exit_result.reason,
+                float(exit_result.pnl_rupees),
+                self.tenant_id, pos.symbol,
             )
         except Exception as exc:
             self._log.error("equity_exit_persist_error", error=str(exc), symbol=pos.symbol)

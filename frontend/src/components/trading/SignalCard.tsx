@@ -21,7 +21,15 @@ const STRATEGY_DISPLAY: Record<string, string> = {
   rsi_vwap_scalp: "RSI VWAP Scalp",
   ema33_ob: "EMA 33 Pullback",
   smc_order_block: "SMC Order Block",
+  brahmaastra: "Brahmaastra",
+  ema5_mean_reversion: "5 EMA Reversion",
+  parent_child_momentum: "Parent-Child",
+  nifty_scalper: "NIFTY Scalper",
+  early_momentum: "Early Momentum",
 };
+
+// Equity strategies trade stocks directly (not options)
+const EQUITY_STRATEGIES = new Set(["early_momentum"]);
 
 export function SignalCard({ signal }: SignalCardProps) {
   const isBuy = signal.direction === "BULLISH" || signal.direction === "BUY" || signal.direction === "BUY_CALL";
@@ -93,13 +101,16 @@ export function SignalCard({ signal }: SignalCardProps) {
               </p>
             </div>
           </div>
-          {signal.trade_status && signal.trade_status !== "OPEN" && (
+          {signal.trade_status && signal.trade_status !== "OPEN" && signal.trade_status !== "PENDING" && (
             <span className={`rounded-md px-2.5 py-1 text-[10px] font-bold ${
               signal.trade_status === "TARGET HIT" ? "bg-profit/20 text-profit" :
               signal.trade_status === "SL HIT" ? "bg-loss/20 text-loss" :
+              signal.trade_status === "TIME STOP" ? "bg-amber-400/20 text-amber-400" :
+              signal.trade_status === "EXPIRED" ? "bg-slate-700/50 text-slate-400" :
+              signal.trade_status === "CLOSED" ? "bg-slate-700/50 text-slate-400" :
               "bg-amber-400/20 text-amber-400"
             }`}>
-              {signal.trade_status}
+              {signal.trade_status === "EXPIRED" ? "SESSION CLOSED" : signal.trade_status}
             </span>
           )}
           {signal.trade_status === "OPEN" && (
@@ -188,10 +199,37 @@ export function SignalCard({ signal }: SignalCardProps) {
         </div>
       )}
 
-      {/* No options chain note */}
-      {!hasOptions && !signal.has_options_chain && (
+      {/* Equity signal — shows stock trade details instead of options */}
+      {!hasOptions && EQUITY_STRATEGIES.has(signal.strategy_name) && (
+        <div className="mt-3">
+          <div className="flex items-center gap-2 mb-1.5">
+            <span className="text-[10px] font-semibold text-slate-500 uppercase">Equity Trade</span>
+            <span className={`rounded px-1.5 py-0.5 text-[10px] font-bold ${dirBg} ${dirColor}`}>
+              {dirLabel} {signal.underlying}
+            </span>
+            {meta.quantity != null && (
+              <span className="text-[10px] text-slate-500">Qty: {String(meta.quantity)}</span>
+            )}
+          </div>
+          {meta.score != null && (
+            <div className="flex items-center gap-2 mb-1.5">
+              <span className="text-[10px] text-slate-500">Score: {String(meta.score)}</span>
+              {Array.isArray(meta.signals_fired) && (
+                <div className="flex flex-wrap gap-1">
+                  {(meta.signals_fired as string[]).map((s, si) => (
+                    <span key={si} className="rounded bg-accent/10 px-1.5 py-0.5 text-[9px] text-accent-light">{s}</span>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* No options chain — for non-equity strategies only */}
+      {!hasOptions && !signal.has_options_chain && !EQUITY_STRATEGIES.has(signal.strategy_name) && (
         <p className="mt-2 text-[10px] text-slate-600">
-          Price signal only — no options chain available for this instrument
+          Index signal — options chain not available at time of signal
         </p>
       )}
 

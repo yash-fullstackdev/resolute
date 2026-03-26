@@ -17,13 +17,15 @@ export const authClient = axios.create({
 });
 
 // Attach Bearer token to every request
-apiClient.interceptors.request.use((config: InternalAxiosRequestConfig) => {
+const attachToken = (config: InternalAxiosRequestConfig) => {
   const token = getAccessToken();
   if (token && config.headers) {
     config.headers.Authorization = `Bearer ${token}`;
   }
   return config;
-});
+};
+apiClient.interceptors.request.use(attachToken);
+authClient.interceptors.request.use(attachToken);
 
 // Auto-refresh on 401
 let isRefreshing = false;

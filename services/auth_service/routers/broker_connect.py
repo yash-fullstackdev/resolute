@@ -111,7 +111,7 @@ async def _verify_broker_credentials(broker: str, api_key: str, api_secret: str,
         if broker == "dhan":
             async with httpx.AsyncClient(timeout=10.0) as client:
                 resp = await client.get(
-                    "https://api.dhan.co/v2/clients/profile",
+                    "https://api.dhan.co/v2/fundlimit",
                     headers={
                         "Content-Type": "application/json",
                         "access-token": api_key,
@@ -210,8 +210,8 @@ async def connect_broker(
         text(
             """
             INSERT INTO user_broker_credentials
-                (id, tenant_id, broker, is_primary, api_key_encrypted, api_secret_encrypted,
-                 client_id_encrypted, totp_secret_encrypted, access_token_encrypted,
+                (id, tenant_id, broker, is_primary, api_key_enc, api_secret_enc,
+                 client_id_enc, totp_secret_enc, access_token_enc,
                  token_expires_at, is_verified, created_at, updated_at)
             VALUES
                 (:id, :tid, :broker, :is_primary, :api_key, :api_secret,
@@ -359,7 +359,7 @@ async def refresh_broker_token(
     result = await session.execute(
         text(
             """
-            SELECT id, api_key_encrypted, api_secret_encrypted, client_id_encrypted, totp_secret_encrypted
+            SELECT id, api_key_enc, api_secret_enc, client_id_enc, totp_secret_enc
             FROM user_broker_credentials
             WHERE tenant_id = :tid AND broker = :broker
             """
@@ -372,10 +372,10 @@ async def refresh_broker_token(
         return _error_response(404, "NOT_FOUND", f"Broker '{broker}' is not connected.")
 
     # Decrypt credentials for the refresh call
-    api_key = decrypt(row.api_key_encrypted)
-    api_secret = decrypt(row.api_secret_encrypted)
-    client_id = decrypt(row.client_id_encrypted)
-    totp_secret = decrypt(row.totp_secret_encrypted)
+    api_key = decrypt(row.api_key_enc)
+    api_secret = decrypt(row.api_secret_enc)
+    client_id = decrypt(row.client_id_enc)
+    totp_secret = decrypt(row.totp_secret_enc)
 
     await _audit_log(
         session, "BROKER_CREDENTIAL_DECRYPTED", tenant_id,
@@ -425,7 +425,7 @@ async def refresh_broker_token(
             text(
                 """
                 UPDATE user_broker_credentials
-                SET access_token_encrypted = :access_token, token_expires_at = :exp, updated_at = :now
+                SET access_token_enc = :access_token, token_expires_at = :exp, updated_at = :now
                 WHERE id = :id
                 """
             ),

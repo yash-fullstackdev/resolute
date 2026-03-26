@@ -144,8 +144,8 @@ async def get_broker_credentials(
     result = await session.execute(
         text(
             """
-            SELECT broker, api_key_encrypted, api_secret_encrypted, client_id_encrypted,
-                   totp_secret_encrypted, access_token_encrypted, token_expires_at, is_verified
+            SELECT broker, api_key_enc, api_secret_enc, client_id_enc,
+                   totp_secret_enc, access_token_enc, token_expires_at, is_verified
             FROM user_broker_credentials
             WHERE tenant_id = :tid
             """
@@ -160,14 +160,14 @@ async def get_broker_credentials(
     credentials = []
     for row in rows:
         # Decrypt all fields
-        api_key = decrypt(row.api_key_encrypted)
-        api_secret = decrypt(row.api_secret_encrypted)
-        client_id = decrypt(row.client_id_encrypted)
-        totp_secret = decrypt(row.totp_secret_encrypted)
+        api_key = decrypt(row.api_key_enc)
+        api_secret = decrypt(row.api_secret_enc)
+        client_id = decrypt(row.client_id_enc)
+        totp_secret = decrypt(row.totp_secret_enc)
 
         access_token = None
-        if row.access_token_encrypted:
-            access_token = decrypt(row.access_token_encrypted)
+        if row.access_token_enc:
+            access_token = decrypt(row.access_token_enc)
 
         credentials.append(
             BrokerCredentialRecord(

@@ -271,6 +271,10 @@ class EarlyMomentumStrategy(BaseEquityStrategy):
             dir_entry_start = sell_entry_start
             dir_entry_end = sell_entry_end
 
+        # Current bucket must be within entry window
+        if bucket < dir_entry_start or bucket > dir_entry_end:
+            return None
+
         entry_snaps = [s for s in snapshots if dir_entry_start <= s.get("bucket", 0) <= dir_entry_end]
         if not entry_snaps:
             return None
@@ -330,23 +334,10 @@ class EarlyMomentumStrategy(BaseEquityStrategy):
         # --- Volume in entry window ---
         vol_entry = sum(s.get("volume_delta", 0) for s in entry_snaps)
 
-        # --- OI cumulative in entry window ---
-        oi_cum = sum(s.get("oi_delta", 0) for s in entry_snaps)
-        oi_directional = (oi_cum * dir_sign) > 0.0
-
-        # --- OI spike: last entry oi_delta vs avg of pre-entry rows ---
-        pre_snaps = [s for s in snapshots if s.get("bucket", 0) < dir_entry_start]
-        if not pre_snaps:
-            avg_pre_oi = 0.0
-        else:
-            avg_pre_oi = sum(abs(s.get("oi_delta", 0)) for s in pre_snaps) / len(pre_snaps)
-        last_oi_abs = abs(last.get("oi_delta", 0))
-        oi_spike = avg_pre_oi > 0.0 and last_oi_abs > avg_pre_oi * 3.0
-
-        # --- OI acceleration (OLS slope, requires >= 3 buckets) ---
-        oi_vals = [float(s.get("oi_delta", 0)) for s in entry_snaps]
-        oi_slope = _ols_slope(oi_vals) if len(oi_vals) >= 3 else 0.0
-        oi_accel = (oi_slope * dir_sign) > 0.0
+        # --- OI indicators REMOVED ---
+        # OI data is not available from equity poller (Dhan quote API
+        # does not return real-time OI for equity cash segment).
+        # Removed: oiDir, oiSpike, oiAcc (3 indicators, 3 points max)
 
         # --- VWAP cross ---
         vwap_cross = False
@@ -397,15 +388,6 @@ class EarlyMomentumStrategy(BaseEquityStrategy):
             score += 2
             fired.append("vol2✓")
 
-        if oi_directional:
-            score += 1
-            fired.append("oiDir✓")
-        if oi_spike:
-            score += 1
-            fired.append("oiSpike✓")
-        if oi_accel:
-            score += 1
-            fired.append("oiAcc✓")
         if vwap_cross:
             score += 1
             fired.append("vwap✓")
@@ -590,7 +572,7 @@ class EarlyMomentumStrategy(BaseEquityStrategy):
 
     @staticmethod
     def _log_skip(symbol: str, direction: str, bucket: int, reason: str) -> None:
-        logger.debug(
+        logger.info(
             "equity_signal_skip",
             symbol=symbol,
             direction=direction,

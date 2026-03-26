@@ -114,6 +114,7 @@ async def list_signals(
     def _map_signal(r: dict) -> dict:
         legs_raw = r.get("legs") or {}
         rationale_raw = r.get("rationale") or ""
+        metadata_col = r.get("metadata")  # JSONB column (used by equity strategies)
 
         # Parse rationale JSON for entry/SL/TP
         entry_price = None
@@ -145,6 +146,21 @@ async def list_signals(
             options = rationale_raw.get("options")
             metadata = rationale_raw
 
+        # Merge metadata JSONB column (equity strategies store data here)
+        if isinstance(metadata_col, dict):
+            metadata.update(metadata_col)
+            # Extract entry/SL/TP from metadata if not already set
+            if not entry_price:
+                entry_price = metadata_col.get("open_price") or metadata_col.get("entry_price")
+            if not stop_loss_price:
+                stop_loss_price = metadata_col.get("sl_price") or metadata_col.get("stop_loss_price")
+            if not target_price:
+                target_price = metadata_col.get("tp_price") or metadata_col.get("target_price")
+            if not metadata.get("instance_name"):
+                metadata["instance_name"] = metadata_col.get("instance_name")
+            if not metadata.get("trading_mode"):
+                metadata["trading_mode"] = metadata_col.get("trading_mode")
+
         # Parse legs for option data
         legs = []
         if isinstance(legs_raw, dict):
@@ -158,7 +174,8 @@ async def list_signals(
             legs = legs_raw
 
         # Compute index risk/reward
-        sig_dir = r.get("direction", "BUY")
+        raw_dir = r.get("direction", "BUY")
+        sig_dir = "BUY" if raw_dir in ("BUY", "BULLISH", "BUY_CALL") else "SELL"
         idx_risk = idx_reward = 0.0
         if entry_price and stop_loss_price:
             if sig_dir == "BUY":
@@ -179,8 +196,40 @@ async def list_signals(
                 current_price = live_prices.get(alias)
 
         live_pnl = None
-        trade_status = "OPEN"
-        if current_price and entry_price:
+        trade_status = None
+
+        # Check if signal is from today (only today's signals can be "LIVE")
+        signal_time = r.get("time")
+        is_today = False
+        if signal_time:
+            from datetime import date as _date
+            try:
+                is_today = signal_time.date() == _date.today()
+            except Exception:
+                is_today = False
+
+        # Check if acted_upon (position was opened and may have closed)
+        acted = r.get("acted_upon") or False
+
+        # Check if signal has stored exit data (definitive close)
+        stored_exit_price = r.get("exit_price")
+        stored_exit_reason = r.get("exit_reason")
+        stored_pnl = r.get("realised_pnl")
+
+        if stored_exit_price:
+            # Signal was closed — show frozen exit data
+            reason_map = {"TP": "TARGET HIT", "SL": "SL HIT", "TIME": "TIME STOP",
+                          "TARGET_HIT": "TARGET HIT", "STOP_HIT": "SL HIT", "TIME_STOP": "TIME STOP"}
+            trade_status = reason_map.get(stored_exit_reason, "CLOSED")
+            live_pnl = round(stored_pnl, 2) if stored_pnl is not None else None
+            current_price = round(stored_exit_price, 2)
+        elif not is_today:
+            # Old signal with no stored exit — session ended
+            trade_status = "EXPIRED"
+            live_pnl = None
+            current_price = None
+        elif current_price and entry_price:
+            trade_status = "OPEN"
             if sig_dir == "BUY":
                 live_pnl = round(current_price - entry_price, 2)
                 if stop_loss_price and current_price <= stop_loss_price:
@@ -193,6 +242,8 @@ async def list_signals(
                     trade_status = "SL HIT"
                 elif target_price and current_price <= target_price:
                     trade_status = "TARGET HIT"
+        else:
+            trade_status = "PENDING" if is_today else "EXPIRED"
 
         return {
             "id": str(r["id"]),

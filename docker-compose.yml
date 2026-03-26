@@ -13,7 +13,9 @@ services:
     ports:
       - "4222:4222"
       - "8222:8222"   # monitoring
-    command: ["-js", "-m", "8222", "--max_payload", "8388608"]
+    command: ["-js", "-m", "8222", "-c", "/etc/nats/nats.conf"]
+    volumes:
+      - ./config/nats.conf:/etc/nats/nats.conf:ro
     restart: unless-stopped
     networks:
       - options-net
@@ -134,7 +136,7 @@ services:
       DATABASE_URL: ${DATABASE_URL}
       REDIS_URL: redis://redis:6379/0
       JWT_SECRET: ${JWT_SECRET}
-      JWT_ACCESS_TOKEN_EXPIRE_MINUTES: 15
+      JWT_ACCESS_TOKEN_EXPIRE_MINUTES: 1440    # 24 hours
       JWT_REFRESH_TOKEN_EXPIRE_DAYS: 30
       CREDENTIAL_MASTER_KEY: ${CREDENTIAL_MASTER_KEY}   # 32-byte hex
       ADMIN_JWT_SECRET: ${ADMIN_JWT_SECRET}              # Separate secret for admin tokens
@@ -144,6 +146,7 @@ services:
       SMTP_PASSWORD: ${SMTP_PASSWORD}
       FROM_EMAIL: ${FROM_EMAIL}
       FRONTEND_URL: ${FRONTEND_URL}                      # For email verification links
+      AUTH_INTERNAL_TOKEN: ${AUTH_INTERNAL_TOKEN}          # Service-to-service auth token
     depends_on:
       timescaledb:
         condition: service_healthy
@@ -266,7 +269,7 @@ services:
         condition: service_healthy
     environment:
       - NATS_URL=nats://nats:4222
-      - DATABASE_URL=postgresql://postgres:postgres@timescaledb:5432/resolute
+      - DATABASE_URL=postgresql://${DB_USER:-options}:${DB_PASSWORD:-admin}@timescaledb:5432/${DB_NAME:-options_db}
       - DHAN_BASE_URL=https://api.dhan.co/v2
       - DHAN_ACCESS_TOKEN=${DHAN_ACCESS_TOKEN:-}
     healthcheck:

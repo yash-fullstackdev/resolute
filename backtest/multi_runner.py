@@ -728,7 +728,13 @@ def run(config: dict) -> dict:
             # Max fires: slot override first, else per-strategy default from shared config
             _sc = _slot_session[s_name]
             s_max_fires = slot.get("max_fires_per_day", _sc["max_fires"])
-            s_time_stop = slot.get("time_stop_bars", exit_cfg["max_hold_bars"])
+            # Support max_hold_minutes (converted to 5m bars) or time_stop_bars
+            _s_params = slot.get("params", {})
+            _hold_min = _s_params.get("max_hold_minutes", 0) if _s_params else 0
+            if _hold_min > 0:
+                s_time_stop = max(1, int(_hold_min / 5))  # convert minutes to 5m bars
+            else:
+                s_time_stop = slot.get("time_stop_bars", exit_cfg["max_hold_bars"])
             s_force_exit = _sc["force_exit_min"]
             s_unified    = _sc["unified_window"]
             s_entry_start  = _sc["entry_start"]
@@ -787,11 +793,20 @@ def run(config: dict) -> dict:
             entry = float(price) + (slip if sig_dir == "BUY" else -slip)
             s_params = slot.get("params", {})
             strategy_sl_cap = s_params.get("max_sl_points", sl_cap)
-            # Per-slot exit multipliers take priority over global exit_cfg
-            _sl_mult = slot.get("sl_atr_mult", exit_cfg["sl_atr_mult"])
-            _tp_mult = slot.get("tp_atr_mult", exit_cfg["tp_atr_mult"])
-            sl_dist = min(_sl_mult * atr, strategy_sl_cap)
-            tp_dist = _tp_mult * atr
+
+            # Check if strategy uses fixed-point SL/TP (e.g. nifty_scalper)
+            _fixed_sl = s_params.get("sl_points", 0)
+            _fixed_tp = s_params.get("tp_points", 0)
+            if _fixed_sl > 0 and _fixed_tp > 0:
+                # Use fixed index-point SL/TP directly
+                sl_dist = float(_fixed_sl)
+                tp_dist = float(_fixed_tp)
+            else:
+                # Per-slot exit multipliers take priority over global exit_cfg
+                _sl_mult = slot.get("sl_atr_mult", exit_cfg["sl_atr_mult"])
+                _tp_mult = slot.get("tp_atr_mult", exit_cfg["tp_atr_mult"])
+                sl_dist = min(_sl_mult * atr, strategy_sl_cap)
+                tp_dist = _tp_mult * atr
 
             if sig_dir == "BUY":
                 sl, tp = entry - sl_dist, entry + tp_dist

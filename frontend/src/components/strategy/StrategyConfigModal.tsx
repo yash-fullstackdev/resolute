@@ -56,6 +56,8 @@ export function StrategyConfigModal({ strategy, instance, onClose }: StrategyCon
   const [searchQuery, setSearchQuery] = useState("");
   const [debouncedQuery, setDebouncedQuery] = useState("");
   const [showDropdown, setShowDropdown] = useState(false);
+  const [equityTiers, setEquityTiers] = useState<Record<string, string[]>>({});
+  const [tierCounts, setTierCounts] = useState<Record<string, number>>({});
   const searchRef = useRef<HTMLDivElement>(null);
 
   // Bias config state
@@ -84,6 +86,22 @@ export function StrategyConfigModal({ strategy, instance, onClose }: StrategyCon
     document.addEventListener("mousedown", handler);
     return () => document.removeEventListener("mousedown", handler);
   }, []);
+
+  // Fetch equity tier data for early_momentum bulk instrument selection
+  useEffect(() => {
+    if (strategy.id !== "early_momentum") return;
+    apiClient
+      .get<ApiResponse<{ tiers: Record<string, string[]>; tier_counts: Record<string, number> }>>(
+        "/symbols/equity-tiers"
+      )
+      .then((r) => {
+        setEquityTiers(r.data.data?.tiers ?? {});
+        setTierCounts(r.data.data?.tier_counts ?? {});
+      })
+      .catch(() => {
+        /* silent — tier buttons just won't appear */
+      });
+  }, [strategy.id]);
 
   // Initialize params from strategy defaults + instance overrides
   useEffect(() => {
@@ -293,7 +311,59 @@ export function StrategyConfigModal({ strategy, instance, onClose }: StrategyCon
 
           {/* Instruments */}
           <div>
-            <label className="block text-[11px] text-slate-500 font-medium uppercase mb-1">Instruments</label>
+            <label className="block text-[11px] text-slate-500 font-medium uppercase mb-1">
+              Instruments
+              {selectedInstruments.length > 0 && (
+                <span className="ml-2 text-[10px] text-slate-600 normal-case font-normal">
+                  {selectedInstruments.length} selected
+                </span>
+              )}
+            </label>
+            {strategy.id === "early_momentum" && Object.keys(equityTiers).length > 0 && (
+              <div className="flex flex-wrap gap-1.5 mb-2">
+                {["F&O", "Nifty50", "Nifty500", "NSEActive", "AllNSE"]
+                  .filter((t) => equityTiers[t] && equityTiers[t].length > 0)
+                  .map((tier) => {
+                    const tierSymbols = equityTiers[tier] ?? [];
+                    const allSelected =
+                      tierSymbols.length > 0 &&
+                      tierSymbols.every((s) => selectedInstruments.includes(s));
+                    return (
+                      <button
+                        key={tier}
+                        type="button"
+                        onClick={() => {
+                          if (allSelected) {
+                            setSelectedInstruments((prev) =>
+                              prev.filter((s) => !tierSymbols.includes(s))
+                            );
+                          } else {
+                            setSelectedInstruments((prev) => [
+                              ...new Set([...prev, ...tierSymbols]),
+                            ]);
+                          }
+                        }}
+                        className={`rounded-full px-3 py-1 text-xs font-medium transition-colors ${
+                          allSelected
+                            ? "bg-accent text-white"
+                            : "bg-surface-dark text-slate-400 hover:text-white hover:bg-surface-border"
+                        }`}
+                      >
+                        {tier} ({tierCounts[tier] ?? 0})
+                      </button>
+                    );
+                  })}
+                {selectedInstruments.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => setSelectedInstruments([])}
+                    className="rounded-full px-3 py-1 text-xs font-medium text-slate-500 hover:text-loss transition-colors"
+                  >
+                    Clear all
+                  </button>
+                )}
+              </div>
+            )}
             {selectedInstruments.length > 0 && (
               <div className="mb-2 flex flex-wrap gap-1">
                 {selectedInstruments.map((sym) => (
@@ -343,12 +413,23 @@ export function StrategyConfigModal({ strategy, instance, onClose }: StrategyCon
                 {strategy.params.map((p) => (
                   <div key={p.name}>
                     <label className="block text-[10px] text-slate-600">{p.description}</label>
-                    <input type="number"
-                      value={paramValues[p.name] ?? (typeof p.default_value === "boolean" ? 0 : p.default_value)}
-                      onChange={(e) => { const n = parseFloat(e.target.value); if (!isNaN(n)) setParamValues((prev) => ({ ...prev, [p.name]: n })); }}
-                      min={p.min} max={p.max}
-                      step={typeof p.default_value === "number" && p.default_value < 1 ? 0.01 : 1}
-                      className={INP} />
+                    {p.type === "select" && p.options ? (
+                      <select
+                        value={String(paramValues[p.name] ?? p.default_value)}
+                        onChange={(e) => setParamValues((prev) => ({ ...prev, [p.name]: e.target.value }))}
+                        className={INP}>
+                        {p.options.map((opt) => (
+                          <option key={opt} value={opt}>{opt}</option>
+                        ))}
+                      </select>
+                    ) : (
+                      <input type="number"
+                        value={paramValues[p.name] ?? (typeof p.default_value === "boolean" ? 0 : p.default_value)}
+                        onChange={(e) => { const n = parseFloat(e.target.value); if (!isNaN(n)) setParamValues((prev) => ({ ...prev, [p.name]: n })); }}
+                        min={p.min} max={p.max}
+                        step={typeof p.default_value === "number" && p.default_value < 1 ? 0.01 : 1}
+                        className={INP} />
+                    )}
                   </div>
                 ))}
               </div>

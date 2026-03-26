@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useMutation } from "@tanstack/react-query";
 import { apiClient, authClient } from "@/lib/api";
 import { useAuthStore } from "@/stores/authStore";
@@ -17,6 +17,19 @@ export default function SettingsPage() {
   const [brokerApiSecret, setBrokerApiSecret] = useState("");
   const [clientId, setClientId] = useState("");
   const [totpSecret, setTotpSecret] = useState("");
+  const [brokerConnected, setBrokerConnected] = useState(false);
+  const [connectedBroker, setConnectedBroker] = useState("");
+
+  // Fetch broker status on page load
+  useEffect(() => {
+    authClient.get("/broker/status").then((res) => {
+      const brokers = res.data?.brokers ?? [];
+      if (brokers.length > 0 && brokers[0].is_verified) {
+        setBrokerConnected(true);
+        setConnectedBroker(brokers[0].broker);
+      }
+    }).catch(() => {});
+  }, []);
 
   const profileMutation = useMutation({
     mutationFn: async () => {
@@ -29,10 +42,19 @@ export default function SettingsPage() {
       await authClient.post("/broker/connect", {
         broker,
         api_key: brokerApiKey,
-        api_secret: brokerApiSecret,
+        api_secret: broker === "dhan" ? "not_used_for_dhan" : brokerApiSecret,
         client_id: clientId,
-        totp_secret: totpSecret,
+        totp_secret: totpSecret || "not_used_0000000000",
       });
+    },
+  });
+
+  const disconnectMutation = useMutation({
+    mutationFn: async () => {
+      await authClient.delete(`/broker/${broker}`);
+    },
+    onSuccess: () => {
+      brokerMutation.reset();
     },
   });
 
@@ -94,13 +116,31 @@ export default function SettingsPage() {
         <div className="mb-4 flex items-center gap-2">
           <span
             className={`rounded-full px-2 py-0.5 text-xs font-medium ${
-              user?.broker_connected
+              brokerConnected || brokerMutation.isSuccess
                 ? "bg-profit/10 text-profit"
                 : "bg-loss/10 text-loss"
             }`}
           >
-            {user?.broker_connected ? "Connected" : "Not Connected"}
+            {brokerConnected || brokerMutation.isSuccess
+              ? `Connected (${connectedBroker || broker})`
+              : "Not Connected"}
           </span>
+          {(brokerConnected || brokerMutation.isSuccess) && !disconnectMutation.isSuccess && (
+            <button
+              onClick={() => {
+                disconnectMutation.mutate();
+                setBrokerConnected(false);
+                setConnectedBroker("");
+              }}
+              disabled={disconnectMutation.isPending}
+              className="rounded-full px-2 py-0.5 text-xs font-medium bg-loss/10 text-loss hover:bg-loss/20 transition-colors"
+            >
+              {disconnectMutation.isPending ? "Disconnecting..." : "Disconnect"}
+            </button>
+          )}
+          {disconnectMutation.isSuccess && (
+            <span className="text-xs text-slate-400">Disconnected. You can reconnect now.</span>
+          )}
         </div>
         <div className="space-y-4">
           <div>
@@ -125,15 +165,18 @@ export default function SettingsPage() {
             />
           </div>
           <div>
-            <label className="mb-1 block text-xs text-slate-400">API Key</label>
+            <label className="mb-1 block text-xs text-slate-400">
+              {broker === "dhan" ? "Access Token" : "API Key"}
+            </label>
             <input
               type="text"
               value={brokerApiKey}
               onChange={(e) => setBrokerApiKey(e.target.value)}
-              placeholder="Enter broker API key"
+              placeholder={broker === "dhan" ? "Paste Dhan access token (JWT)" : "Enter broker API key"}
               className="w-full rounded-lg border border-surface-border bg-surface-dark px-4 py-2.5 text-sm text-white placeholder-slate-500 focus:border-accent focus:outline-none"
             />
           </div>
+          {broker !== "dhan" && (
           <div>
             <label className="mb-1 block text-xs text-slate-400">API Secret</label>
             <input
@@ -144,6 +187,7 @@ export default function SettingsPage() {
               className="w-full rounded-lg border border-surface-border bg-surface-dark px-4 py-2.5 text-sm text-white placeholder-slate-500 focus:border-accent focus:outline-none"
             />
           </div>
+          )}
           <div>
             <label className="mb-1 block text-xs text-slate-400">TOTP Secret</label>
             <input
@@ -162,7 +206,7 @@ export default function SettingsPage() {
           )}
           <button
             onClick={() => brokerMutation.mutate()}
-            disabled={brokerMutation.isPending || !brokerApiKey || !brokerApiSecret || !clientId}
+            disabled={brokerMutation.isPending || !brokerApiKey || !clientId || (broker !== "dhan" && !brokerApiSecret)}
             className="flex items-center gap-2 rounded-lg bg-accent px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-accent-light disabled:opacity-50"
           >
             {brokerMutation.isSuccess ? (

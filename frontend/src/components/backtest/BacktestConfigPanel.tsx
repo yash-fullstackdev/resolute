@@ -91,6 +91,7 @@ const BACKTEST_STRATEGIES = [
   "ttm_squeeze", "supertrend_strategy", "vwap_supertrend",
   "ema_breakdown", "rsi_vwap_scalp", "ema33_ob", "smc_order_block",
   "brahmaastra", "ema5_mean_reversion", "parent_child_momentum",
+  "nifty_scalper",
 ];
 
 
@@ -169,6 +170,22 @@ const STRATEGY_PARAMS: Record<string, { key: string; label: string; default: num
     { key: "macd_slow", label: "MACD Slow", default: 104, min: 26, max: 200 },
     { key: "macd_signal", label: "MACD Signal", default: 36, min: 9, max: 72 },
     { key: "profit_target_pct", label: "Profit Target %", default: 25, min: 10, max: 100 },
+  ],
+  nifty_scalper: [
+    { key: "min_score", label: "Min Score", default: 3, min: 1, max: 15 },
+    { key: "consolidation_weight", label: "Consolidation Break Wt", default: 4, min: 0, max: 10 },
+    { key: "level_break_weight", label: "Level Break Wt", default: 3, min: 0, max: 10 },
+    { key: "engulfing_weight", label: "Engulfing Wt", default: 3, min: 0, max: 10 },
+    { key: "momentum_burst_weight", label: "Momentum Wt", default: 2, min: 0, max: 10 },
+    { key: "micro_pullback_weight", label: "Pullback Wt", default: 2, min: 0, max: 10 },
+    { key: "consolidation_range", label: "Consol Range (pts)", default: 30, min: 10, max: 60 },
+    { key: "engulfing_min_body", label: "Min Body (pts)", default: 15, min: 5, max: 40 },
+    { key: "min_expansion_body", label: "Breakout Body (pts)", default: 20, min: 10, max: 50 },
+    { key: "pullback_trend_pts", label: "Trend (pts)", default: 30, min: 10, max: 60 },
+    { key: "momentum_min_range", label: "Mom Range (pts)", default: 10, min: 3, max: 30 },
+    { key: "sl_points", label: "SL (pts)", default: 20, min: 5, max: 50 },
+    { key: "tp_points", label: "TP (pts)", default: 30, min: 10, max: 100 },
+    { key: "max_hold_minutes", label: "Max Hold (min)", default: 15, min: 5, max: 60 },
   ],
 };
 

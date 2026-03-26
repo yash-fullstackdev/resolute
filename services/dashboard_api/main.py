@@ -54,7 +54,8 @@ from .routers import (
     user,
     watchlist,
 )
-from .socketio_server import sio, create_sio_app
+from .routers.chain import close_dhan_client
+from .socketio_server import sio, create_sio_app, start_chain_broadcaster, stop_chain_broadcaster
 
 # ── Structlog Configuration ─────────────────────────────────────────────────
 
@@ -275,6 +276,10 @@ async def lifespan(app: FastAPI):
     # WebSocket gauge reference for routers
     app.state.active_ws_gauge = active_websocket_connections
 
+    # Start option chain WebSocket broadcaster (polls Dhan every 3s for active rooms)
+    chain_task = start_chain_broadcaster(redis)
+    logger.info("chain_broadcaster_started")
+
     # Verify database connectivity
     db_healthy, db_latency = await check_db_health()
     if db_healthy:
@@ -302,6 +307,11 @@ async def lifespan(app: FastAPI):
 
     # ── Shutdown ──
     logger.info("dashboard_api_shutting_down")
+
+    # Stop chain broadcaster + Dhan HTTP client
+    stop_chain_broadcaster()
+    await close_dhan_client()
+    logger.info("chain_broadcaster_stopped")
 
     # Stop worker pool
     if worker_pool:

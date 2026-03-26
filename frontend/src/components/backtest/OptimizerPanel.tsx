@@ -65,6 +65,18 @@ const STRATEGY_PARAM_GRIDS: Record<string, { key: string; label: string; values:
     { key: "macd_fast", label: "MACD Fast", values: [36, 48, 60] },
     { key: "profit_target_pct", label: "Profit %", values: [20, 25, 30] },
   ],
+  nifty_scalper: [
+    { key: "min_score", label: "Min Score", values: [2, 3, 4, 5] },
+    { key: "consolidation_weight", label: "Consol Wt", values: [0, 3, 4, 5] },
+    { key: "level_break_weight", label: "Level Break Wt", values: [0, 2, 3, 4] },
+    { key: "engulfing_weight", label: "Engulfing Wt", values: [0, 2, 3, 4] },
+    { key: "consolidation_range", label: "Consol Range", values: [20, 25, 30, 40] },
+    { key: "engulfing_min_body", label: "Min Body", values: [10, 15, 20] },
+    { key: "min_expansion_body", label: "Break Body", values: [15, 20, 25] },
+    { key: "sl_points", label: "SL (pts)", values: [15, 20, 25, 30] },
+    { key: "tp_points", label: "TP (pts)", values: [20, 25, 30, 40, 50] },
+    { key: "max_hold_minutes", label: "Max Hold (min)", values: [10, 15, 20, 30] },
+  ],
 };
 
 // Default exit grids per strategy (matches fast_strategies.py STRATEGY_EXIT_DEFAULTS)
@@ -72,6 +84,7 @@ const STRATEGY_EXIT_GRID_DEFAULTS: Record<string, { sl_atr_mult: number[]; tp_at
   brahmaastra:           { sl_atr_mult: [0.5], tp_atr_mult: [0.75], max_hold_bars: [12] },
   ema5_mean_reversion:   { sl_atr_mult: [0.5], tp_atr_mult: [1.5],  max_hold_bars: [24] },
   parent_child_momentum: { sl_atr_mult: [1.0], tp_atr_mult: [1.5],  max_hold_bars: [16] },
+  nifty_scalper:         { sl_atr_mult: [0.5], tp_atr_mult: [1.5],  max_hold_bars: [3] },  // uses sl_points/tp_points from params, not ATR
 };
 const DEFAULT_EXIT_GRID = { sl_atr_mult: [0.5], tp_atr_mult: [1.5], max_hold_bars: [20] };
 
@@ -125,6 +138,7 @@ const BACKTEST_STRATEGIES = [
   "ttm_squeeze", "supertrend_strategy", "vwap_supertrend",
   "ema_breakdown", "rsi_vwap_scalp", "ema33_ob", "smc_order_block",
   "brahmaastra", "ema5_mean_reversion", "parent_child_momentum",
+  "nifty_scalper",
 ];
 
 const OPTIMIZE_METRICS = [

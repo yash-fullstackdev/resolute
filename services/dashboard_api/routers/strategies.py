@@ -238,37 +238,43 @@ INDICATOR_LIBRARY = [
 
 @router.get("/status")
 async def get_instance_status(request: Request):
-    """Get runtime status for all strategy instances — shows if they're running."""
+    """Get status for all strategy instances from DB."""
     tenant_id = request.state.tenant_id
 
-    pool = getattr(request.app.state, "worker_pool", None)
-    if pool is None:
-        return {"success": True, "data": [], "worker_running": False}
-
-    worker = pool.workers.get(tenant_id)
-    if worker is None:
-        return {"success": True, "data": [], "worker_running": False}
-
+    # Fetch enabled instances from DB (dashboard_api can't access worker_pool directly)
     try:
-        statuses = worker.get_instance_statuses()
+        async with rls_session(tenant_id) as session:
+            result = await session.execute(
+                text("""
+                    SELECT id, strategy_name, instance_name, enabled, trading_mode,
+                           session, max_daily_loss_pts
+                    FROM user_strategy_configs
+                    WHERE tenant_id = :tid AND enabled = true
+                    ORDER BY strategy_name
+                """),
+                {"tid": tenant_id},
+            )
+            rows = result.mappings().all()
     except Exception:
-        statuses = []
+        rows = []
 
-    # Add candle store health info
-    candle_store = getattr(worker, "_candle_store", None)
-    feed_healthy = False
-    if candle_store:
-        # Check if any symbol has fresh ticks
-        for sym in getattr(candle_store, "_last_tick_time", {}).keys():
-            if not candle_store.is_tick_stale(sym, 60):
-                feed_healthy = True
-                break
+    statuses = []
+    for row in rows:
+        statuses.append({
+            "instance_id": str(row["id"]),
+            "instance_name": row["instance_name"] or row["strategy_name"],
+            "strategy_name": row["strategy_name"],
+            "running": row["trading_mode"] in ("live", "paper"),
+            "mode": row["trading_mode"],
+            "session": row["session"],
+            "signals_today": 0,
+            "daily_pnl": 0,
+        })
 
     return {
         "success": True,
         "data": statuses,
-        "worker_running": True,
-        "feed_healthy": feed_healthy,
+        "worker_running": len(statuses) > 0,
         "total_instances": len(statuses),
     }
 
@@ -290,6 +296,8 @@ async def list_strategies(request: Request):
         ("brahmaastra", "Brahmaastra", "BUYING", "STARTER", "9:15–10:15 AM first-hour strategy: Opening Range Breakout + PDH/PDL trap formation with wick rejection — 50% partial book at 1:1, kill switch at 10:30"),
         ("ema5_mean_reversion", "5 EMA Mean Reversion", "BUYING", "STARTER", "Counter-trend option buying on 5 EMA exhaustion — buys CE/PE when price floats far from 5 EMA and snaps back, 1:3 RR with 3-loss daily circuit breaker"),
         ("parent_child_momentum", "Parent-Child Momentum", "BUYING", "STARTER", "1H parent (EMA 10/30/100 + MACD) gates direction, 5m child MACD crossover triggers entry — 10:00–14:30 window, OTM strikes, structural swing SL"),
+        ("early_momentum", "Early Momentum (Equity)", "HYBRID", "GROWTH", "Equity intraday momentum — scores 10+ indicators in first 45min of market open, trades individual NSE stocks with per-direction BUY/SELL configs"),
+        ("nifty_scalper", "NIFTY Scalper", "TECHNICAL", "STARTER", "1-minute scalper -- scores 6 candle patterns (engulfing, pullback, momentum, inside bar, volume spike, PDC), fires on confluence with configurable weights"),
     ]
 
     # Configurable params for technical strategies (shown on UI)
@@ -367,6 +375,48 @@ async def list_strategies(request: Request):
             {"name": "macd_signal", "type": "number", "default_value": 36, "current_value": 36, "description": "MACD signal period (1H parent)", "min": 9, "max": 72},
             {"name": "strike_selection", "type": "select", "default_value": "1_OTM", "current_value": "1_OTM", "description": "Strike to buy", "options": ["ATM", "1_OTM", "2_OTM"]},
             {"name": "profit_target_pct", "type": "number", "default_value": 25, "current_value": 25, "description": "Premium profit target %", "min": 10, "max": 100},
+        ],
+        "early_momentum": [
+            {"name": "direction_filter", "type": "select", "default_value": "BOTH", "current_value": "BOTH", "description": "Trade direction", "options": ["BOTH", "BUY", "SELL"]},
+            {"name": "buy_entry_start", "type": "number", "default_value": 2, "current_value": 2, "description": "BUY entry window start (bucket, 1=9:15)", "min": 1, "max": 20},
+            {"name": "buy_entry_end", "type": "number", "default_value": 3, "current_value": 3, "description": "BUY entry window end (bucket)", "min": 1, "max": 30},
+            {"name": "sell_entry_start", "type": "number", "default_value": 2, "current_value": 2, "description": "SELL entry window start (bucket)", "min": 1, "max": 20},
+            {"name": "sell_entry_end", "type": "number", "default_value": 4, "current_value": 4, "description": "SELL entry window end (bucket)", "min": 1, "max": 30},
+            {"name": "buy_min_move_pct", "type": "number", "default_value": 0.15, "current_value": 0.15, "description": "BUY min price move % from open", "min": 0.01, "max": 2.0},
+            {"name": "sell_min_move_pct", "type": "number", "default_value": 0.15, "current_value": 0.15, "description": "SELL min price move % from open", "min": 0.01, "max": 2.0},
+            {"name": "buy_min_score", "type": "number", "default_value": 3, "current_value": 3, "description": "BUY min indicator score to trade", "min": 1, "max": 12},
+            {"name": "sell_min_score", "type": "number", "default_value": 3, "current_value": 3, "description": "SELL min indicator score to trade", "min": 1, "max": 12},
+            {"name": "buy_min_vol_rate", "type": "number", "default_value": 150.0, "current_value": 150.0, "description": "BUY min volume rate (shares/sec)", "min": 10, "max": 1000},
+            {"name": "sell_min_vol_rate", "type": "number", "default_value": 150.0, "current_value": 150.0, "description": "SELL min volume rate (shares/sec)", "min": 10, "max": 1000},
+            {"name": "buy_tp_pct", "type": "number", "default_value": 0.0, "current_value": 0.0, "description": "BUY take profit % (0=disabled, use time exit)", "min": 0.0, "max": 5.0},
+            {"name": "buy_sl_pct", "type": "number", "default_value": 0.0, "current_value": 0.0, "description": "BUY stop loss % (0=disabled, use time exit)", "min": 0.0, "max": 5.0},
+            {"name": "sell_tp_pct", "type": "number", "default_value": 0.0, "current_value": 0.0, "description": "SELL take profit % (0=disabled)", "min": 0.0, "max": 5.0},
+            {"name": "sell_sl_pct", "type": "number", "default_value": 0.0, "current_value": 0.0, "description": "SELL stop loss % (0=disabled)", "min": 0.0, "max": 5.0},
+            {"name": "hard_exit_bucket", "type": "number", "default_value": 46, "current_value": 46, "description": "BUY time exit bucket (46=10:00 IST)", "min": 10, "max": 100},
+            {"name": "sell_hard_exit_bucket", "type": "number", "default_value": 76, "current_value": 76, "description": "SELL time exit bucket (76=11:00 IST)", "min": 10, "max": 150},
+            {"name": "buy_gap_max_pct", "type": "number", "default_value": 3.0, "current_value": 3.0, "description": "Skip BUY if gap > this %", "min": 0.5, "max": 10.0},
+            {"name": "sell_gap_min_pct", "type": "number", "default_value": -1.0, "current_value": -1.0, "description": "Skip SELL if gap < this %", "min": -10.0, "max": 0.0},
+            {"name": "quantity", "type": "number", "default_value": 1, "current_value": 1, "description": "Base quantity per trade", "min": 1, "max": 1000},
+            {"name": "capital_per_trade", "type": "number", "default_value": 10000, "current_value": 10000, "description": "Capital per trade INR (0=use fixed qty)", "min": 0, "max": 500000},
+        ],
+        "nifty_scalper": [
+            {"name": "min_score", "type": "number", "default_value": 3, "current_value": 3, "description": "Min score to fire signal", "min": 1, "max": 15},
+            {"name": "engulfing_weight", "type": "number", "default_value": 3, "current_value": 3, "description": "Engulfing pattern weight", "min": 0, "max": 10},
+            {"name": "micro_pullback_weight", "type": "number", "default_value": 3, "current_value": 3, "description": "Micro pullback weight", "min": 0, "max": 10},
+            {"name": "momentum_burst_weight", "type": "number", "default_value": 2, "current_value": 2, "description": "Momentum burst weight", "min": 0, "max": 10},
+            {"name": "inside_bar_weight", "type": "number", "default_value": 2, "current_value": 2, "description": "Inside bar breakout weight", "min": 0, "max": 10},
+            {"name": "volume_spike_weight", "type": "number", "default_value": 5, "current_value": 5, "description": "Volume spike weight (live only)", "min": 0, "max": 10},
+            {"name": "pdc_sniper_weight", "type": "number", "default_value": 4, "current_value": 4, "description": "PDC sniper weight", "min": 0, "max": 10},
+            {"name": "engulfing_min_body", "type": "number", "default_value": 10, "current_value": 10, "description": "Min engulfing body (pts)", "min": 3, "max": 50},
+            {"name": "engulfing_body_ratio", "type": "number", "default_value": 0.6, "current_value": 0.6, "description": "Min body/range ratio", "min": 0.3, "max": 0.9},
+            {"name": "pullback_trend_pts", "type": "number", "default_value": 15, "current_value": 15, "description": "Min trend before pullback (pts)", "min": 5, "max": 50},
+            {"name": "momentum_min_range", "type": "number", "default_value": 5, "current_value": 5, "description": "Min burst bar range (pts)", "min": 2, "max": 20},
+            {"name": "inside_bar_min_range", "type": "number", "default_value": 8, "current_value": 8, "description": "Min mother bar range (pts)", "min": 3, "max": 30},
+            {"name": "sl_points", "type": "number", "default_value": 15, "current_value": 15, "description": "Stop loss (index pts)", "min": 3, "max": 50},
+            {"name": "tp_points", "type": "number", "default_value": 25, "current_value": 25, "description": "Take profit (index pts)", "min": 5, "max": 100},
+            {"name": "max_hold_minutes", "type": "number", "default_value": 15, "current_value": 15, "description": "Max hold time (min)", "min": 2, "max": 60},
+            {"name": "strike_selection", "type": "select", "default_value": "ATM", "current_value": "ATM", "description": "Option strike", "options": ["ATM", "1_OTM", "2_OTM"]},
+            {"name": "max_trades_per_day", "type": "number", "default_value": 5, "current_value": 5, "description": "Max trades per day", "min": 1, "max": 20},
         ],
     }
 

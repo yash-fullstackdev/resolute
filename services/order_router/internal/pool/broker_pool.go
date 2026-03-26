@@ -225,17 +225,20 @@ func (p *BrokerPool) Shutdown() {
 
 // fetchCredentials retrieves decrypted broker credentials from the auth_service internal API.
 func (p *BrokerPool) fetchCredentials(ctx context.Context, tenantID string) (broker.BrokerCredentials, error) {
-	url := fmt.Sprintf("%s/internal/broker-credentials/%s", p.authServiceURL, tenantID)
+	url := fmt.Sprintf("%s/internal/broker-creds/%s", p.authServiceURL, tenantID)
 
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
 		return broker.BrokerCredentials{}, fmt.Errorf("create request: %w", err)
 	}
 
-	// Internal service auth header
-	internalKey := os.Getenv("INTERNAL_API_KEY")
-	if internalKey != "" {
-		req.Header.Set("X-Internal-API-Key", internalKey)
+	// Internal service auth — auth_service expects "Authorization: Bearer {token}"
+	internalToken := os.Getenv("AUTH_INTERNAL_TOKEN")
+	if internalToken == "" {
+		internalToken = os.Getenv("INTERNAL_API_KEY") // fallback
+	}
+	if internalToken != "" {
+		req.Header.Set("Authorization", "Bearer "+internalToken)
 	}
 
 	resp, err := p.httpClient.Do(req)
@@ -249,11 +252,16 @@ func (p *BrokerPool) fetchCredentials(ctx context.Context, tenantID string) (bro
 		return broker.BrokerCredentials{}, fmt.Errorf("auth service returned %d: %s", resp.StatusCode, string(body))
 	}
 
-	var creds broker.BrokerCredentials
-	if err := json.NewDecoder(resp.Body).Decode(&creds); err != nil {
+	// auth_service returns array of credentials (one per broker) — take first
+	var credsList []broker.BrokerCredentials
+	if err := json.NewDecoder(resp.Body).Decode(&credsList); err != nil {
 		return broker.BrokerCredentials{}, fmt.Errorf("decode credentials: %w", err)
 	}
+	if len(credsList) == 0 {
+		return broker.BrokerCredentials{}, fmt.Errorf("no broker credentials configured for tenant %s", tenantID)
+	}
 
+	creds := credsList[0]
 	creds.TenantID = tenantID
 	return creds, nil
 }

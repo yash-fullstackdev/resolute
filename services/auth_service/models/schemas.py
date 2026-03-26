@@ -81,10 +81,10 @@ class LogoutAllResponse(BaseModel):
 
 class BrokerConnectRequest(BaseModel):
     broker: str = Field(pattern=r"^(dhan|zerodha)$")
-    api_key: str = Field(min_length=10, max_length=100)
-    api_secret: str = Field(min_length=10, max_length=100)
+    api_key: str = Field(min_length=10, max_length=500)  # Dhan JWT tokens are long
+    api_secret: str = Field(default="not_used", max_length=100)  # Not needed for Dhan
     client_id: str = Field(min_length=5, max_length=20)
-    totp_secret: str = Field(min_length=16, max_length=64)
+    totp_secret: str = Field(default="not_used_000000", max_length=64)  # Not needed for Dhan
 
 
 class BrokerConnectResponse(BaseModel):
