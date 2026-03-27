@@ -306,18 +306,30 @@ func (d *DhanClient) CancelOrder(ctx context.Context, brokerOrderID string) erro
 }
 
 // GetOrderStatus retrieves the current status of an order.
+// Dhan returns an array of order objects; we take the first element.
 func (d *DhanClient) GetOrderStatus(ctx context.Context, brokerOrderID string) (OrderStatus, error) {
 	if err := d.limiter.Wait(ctx); err != nil {
 		return OrderStatus{}, fmt.Errorf("rate limiter: %w", err)
 	}
 
 	url := fmt.Sprintf("%s/orders/%s", dhanBaseURL, brokerOrderID)
-	var resp dhanOrderStatusResponse
-	err := d.doRequestWithRetry(ctx, "GET", url, nil, &resp)
+	var respArr []dhanOrderStatusResponse
+	err := d.doRequestWithRetry(ctx, "GET", url, nil, &respArr)
 	if err != nil {
-		return OrderStatus{}, err
+		// Fallback: try as single object (older API versions)
+		var resp dhanOrderStatusResponse
+		err2 := d.doRequestWithRetry(ctx, "GET", url, nil, &resp)
+		if err2 != nil {
+			return OrderStatus{}, err
+		}
+		respArr = []dhanOrderStatusResponse{resp}
 	}
 
+	if len(respArr) == 0 {
+		return OrderStatus{}, fmt.Errorf("empty order status response for %s", brokerOrderID)
+	}
+
+	resp := respArr[0]
 	return OrderStatus{
 		BrokerOrderID: resp.OrderID,
 		Status:        mapDhanStatus(resp.OrderStatus),

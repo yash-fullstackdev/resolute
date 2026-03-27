@@ -10,16 +10,18 @@ type Client struct {
 	HTTP        *http.Client
 	BaseURL     string
 	AccessToken string
+	ClientID    string
 }
 
 // NewClient creates a Dhan API client.
-func NewClient(baseURL, accessToken string) *Client {
+func NewClient(baseURL, accessToken, clientID string) *Client {
 	return &Client{
 		HTTP: &http.Client{
 			Timeout: 15 * time.Second,
 		},
 		BaseURL:     baseURL,
 		AccessToken: accessToken,
+		ClientID:    clientID,
 	}
 }
 

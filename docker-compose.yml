@@ -109,6 +109,8 @@ services:
       NATS_URL: nats://nats:4222
       DATABASE_URL: ${DATABASE_URL}
       RBI_REPO_RATE: ${RBI_REPO_RATE:-6.5}
+      FEED_ACCESS_TOKEN: ${FEED_ACCESS_TOKEN:-}
+      FEED_CLIENT_ID: ${FEED_CLIENT_ID:-}
       CONFIG_PATH: /config
     volumes:
       - ./config:/config:ro
@@ -169,6 +171,8 @@ services:
       AUTH_SERVICE_URL: http://auth_service:8001
       AUTH_INTERNAL_TOKEN: ${AUTH_INTERNAL_TOKEN}        # mTLS token for service-to-service
       CONFIG_PATH: /config
+      FEED_ACCESS_TOKEN: ${FEED_ACCESS_TOKEN:-}
+      FEED_CLIENT_ID: ${FEED_CLIENT_ID:-}
       PLAN_LOCK_TIME_IST: ${PLAN_LOCK_TIME_IST:-09:10}
       PLAN_UNLOCK_TIME_IST: ${PLAN_UNLOCK_TIME_IST:-15:35}
       OVERRIDE_COOLDOWN_SECONDS: ${OVERRIDE_COOLDOWN_SECONDS:-60}
@@ -198,7 +202,7 @@ services:
     build: ./services/order_router
     environment:
       NATS_URL: nats://nats:4222
-      DATABASE_URL: ${DATABASE_URL}
+      DATABASE_URL: postgresql://${DB_USER:-options}:${DB_PASSWORD:-admin}@timescaledb:5432/${DB_NAME:-options_db}
       AUTH_SERVICE_URL: http://auth_service:8001
       AUTH_INTERNAL_TOKEN: ${AUTH_INTERNAL_TOKEN}
       TOKEN_REFRESH_TIME_IST: "07:00"    # Daily Dhan token refresh time
@@ -272,6 +276,7 @@ services:
       - DATABASE_URL=postgresql://${DB_USER:-options}:${DB_PASSWORD:-admin}@timescaledb:5432/${DB_NAME:-options_db}
       - DHAN_BASE_URL=https://api.dhan.co/v2
       - DHAN_ACCESS_TOKEN=${DHAN_ACCESS_TOKEN:-}
+      - DHAN_CLIENT_ID=${DHAN_CLIENT_ID:-}
     healthcheck:
       test: ["CMD", "wget", "-q", "--spider", "http://localhost:8081/health"]
       interval: 30s

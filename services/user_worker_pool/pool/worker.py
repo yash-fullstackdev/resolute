@@ -679,6 +679,13 @@ class UserWorker:
                 continue
 
             if signal is None:
+                self._log.info(
+                    "strategy_no_signal",
+                    instance=inst.instance_name,
+                    strategy=strategy.name,
+                    underlying=chain.underlying,
+                    spot=round(chain.underlying_price, 2),
+                )
                 continue
 
             # Record raw direction so other instances can use this as strategy_instance bias

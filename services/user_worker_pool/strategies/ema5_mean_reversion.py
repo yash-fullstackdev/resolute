@@ -157,7 +157,7 @@ class EMA5MeanReversionStrategy(BaseStrategy):
             return None
 
         # ── VIX filter ───────────────────────────────────────────────────
-        vix = getattr(chain, "india_vix", None) or regime.get("india_vix", 0.0)
+        vix = getattr(chain, "india_vix", None) or getattr(regime, "india_vix", 0.0)
         min_vix = float(config.get("min_india_vix", 12.0))
         max_vix = float(config.get("max_india_vix", 35.0))
         if vix > 0 and (vix < min_vix or vix > max_vix):

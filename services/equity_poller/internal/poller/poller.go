@@ -123,7 +123,8 @@ func (p *Poller) GetState() *State {
 // loadInstruments loads active security IDs and symbol mapping from equity_instruments.
 func (p *Poller) loadInstruments(ctx context.Context) error {
 	rows, err := p.pool.Query(ctx,
-		`SELECT security_id, symbol FROM equity_instruments WHERE exchange = 'NSE' AND segment = 'NSE_EQ'`,
+		`SELECT security_id, symbol FROM equity_instruments
+		 WHERE enabled = true AND tiers @> ARRAY['F&O']::text[]`,
 	)
 	if err != nil {
 		return err

@@ -73,7 +73,7 @@ def _build_bars(candles: dict, count: int = 20) -> list[dict]:
         return []
 
     # Pad volumes with zeros if missing or shorter
-    if not volumes or len(volumes) < n:
+    if len(volumes) == 0 or len(volumes) < n:
         volumes = [0] * n
 
     start = max(0, n - count)
@@ -379,7 +379,7 @@ class NiftyScalperStrategy(BaseStrategy):
 
         # ── candle data ───────────────────────────────────────────────
         data_1m: dict | None = chain.candles_1m
-        if not data_1m or "close" not in data_1m:
+        if data_1m is None or "close" not in data_1m:
             return None
 
         bars = _build_bars(data_1m, count=20)
@@ -422,9 +422,9 @@ class NiftyScalperStrategy(BaseStrategy):
 
         # ── PDC derivation ────────────────────────────────────────────
         pdc: float | None = None
-        if hasattr(chain, "prev_day_close") and chain.prev_day_close:
+        if hasattr(chain, "prev_day_close") and chain.prev_day_close is not None and chain.prev_day_close != 0:
             pdc = chain.prev_day_close
-        elif hasattr(chain, "candles_1d") and chain.candles_1d:
+        elif hasattr(chain, "candles_1d") and chain.candles_1d is not None:
             day_closes = chain.candles_1d.get("close", [])
             if len(day_closes) >= 2:
                 pdc = day_closes[-2]
@@ -502,7 +502,7 @@ class NiftyScalperStrategy(BaseStrategy):
         spot = bars[-1]["c"]
         strike_sel = cfg.get("strike_selection", "ATM")
 
-        if not chain.strikes:
+        if chain.strikes is None or len(chain.strikes) == 0:
             # No options chain available — cannot produce an OPTIONS signal
             return None
 
@@ -638,7 +638,7 @@ class NiftyScalperStrategy(BaseStrategy):
 
         # Get current premium from chain
         current_premium: float | None = None
-        if current_chain.strikes:
+        if current_chain.strikes is not None and len(current_chain.strikes) > 0:
             strike_data = self.find_strike_near(
                 current_chain, leg.strike, leg.option_type,
             )

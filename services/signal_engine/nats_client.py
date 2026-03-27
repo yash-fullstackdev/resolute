@@ -25,11 +25,12 @@ from nats.aio.msg import Msg
 import structlog
 
 from .engine.chain_processor import ChainProcessor
+from .engine.rest_chain_fetcher import RestChainFetcher
 
 logger = structlog.get_logger(service="signal_engine", module="nats_client")
 
 NATS_URL = os.environ.get("NATS_URL", "nats://localhost:4222")
-CHAIN_PUBLISH_INTERVAL = float(os.environ.get("CHAIN_PUBLISH_INTERVAL", "5.0"))
+CHAIN_PUBLISH_INTERVAL = float(os.environ.get("CHAIN_PUBLISH_INTERVAL", "10.0"))
 HEARTBEAT_INTERVAL = 10.0
 
 
@@ -39,6 +40,7 @@ class SignalEngineNATSClient:
     def __init__(self, chain_processor: ChainProcessor):
         self._nc: NATSClient | None = None
         self._chain_processor = chain_processor
+        self._rest_fetcher = RestChainFetcher()
         self._publish_task: asyncio.Task | None = None
         self._heartbeat_task: asyncio.Task | None = None
         self._shutting_down = False
@@ -74,6 +76,9 @@ class SignalEngineNATSClient:
         self._subs.append(sub_chain_req)
         logger.info("nats_subscribed_request_reply", subject="chain.request.*")
 
+        # Start REST chain fetcher (for option chains via Dhan REST API)
+        await self._rest_fetcher.start()
+
         # Start periodic publishers
         self._publish_task = asyncio.create_task(self._periodic_chain_publish())
         self._heartbeat_task = asyncio.create_task(self._periodic_heartbeat())
@@ -97,6 +102,8 @@ class SignalEngineNATSClient:
                 await sub.unsubscribe()
             except Exception:
                 pass
+
+        await self._rest_fetcher.close()
 
         if self._nc is not None and not self._nc.is_closed:
             await self._nc.drain()
@@ -150,13 +157,19 @@ class SignalEngineNATSClient:
     # ------------------------------------------------------------------
 
     async def _periodic_chain_publish(self) -> None:
-        """Publish chain snapshots for all tracked underlyings every N seconds."""
+        """Publish chain snapshots for all tracked underlyings every N seconds.
+
+        First tries WebSocket-based chains from ChainProcessor.
+        Falls back to REST-based fetching from Dhan API.
+        """
         logger.info("chain_publish_loop_started", interval_s=CHAIN_PUBLISH_INTERVAL)
 
         while not self._shutting_down:
             try:
                 await asyncio.sleep(CHAIN_PUBLISH_INTERVAL)
+                published = 0
 
+                # Try WebSocket-based chains first
                 underlyings = self._chain_processor.get_underlyings()
                 for underlying in underlyings:
                     try:
@@ -165,25 +178,47 @@ class SignalEngineNATSClient:
                             continue
 
                         segment = self._chain_processor.get_segment(underlying)
-                        # Normalise segment for subject: NSE_FO -> nse, MCX -> mcx
                         segment_key = "mcx" if segment == "MCX" else "nse"
                         subject = f"chain.{segment_key}.{underlying}"
 
                         payload = json.dumps(snapshot.to_dict()).encode()
                         await self._nc.publish(subject, payload)
+                        published += 1
 
                         logger.debug(
                             "chain_snapshot_published",
                             subject=subject,
                             underlying=underlying,
                             num_strikes=len(snapshot.strikes),
+                            source="websocket",
                         )
                     except Exception as exc:
-                        logger.error(
-                            "chain_publish_error",
-                            underlying=underlying,
-                            error=str(exc),
-                        )
+                        logger.error("chain_publish_error", underlying=underlying, error=str(exc))
+
+                # Fallback: REST-based chain fetching if no WebSocket chains
+                if published == 0:
+                    try:
+                        rest_snapshots = await self._rest_fetcher.fetch_chains()
+                        for snapshot in rest_snapshots:
+                            segment_key = "nse"  # All supported underlyings are NSE/BSE
+                            subject = f"chain.{segment_key}.{snapshot.underlying}"
+
+                            payload = json.dumps(snapshot.to_dict()).encode()
+                            await self._nc.publish(subject, payload)
+                            published += 1
+
+                            logger.info(
+                                "chain_snapshot_published",
+                                subject=subject,
+                                underlying=snapshot.underlying,
+                                num_strikes=len(snapshot.strikes),
+                                spot=round(snapshot.underlying_price, 2),
+                                atm_iv=round(snapshot.atm_iv, 4),
+                                source="rest",
+                            )
+                    except Exception as exc:
+                        logger.error("rest_chain_fetch_error", error=str(exc))
+
             except asyncio.CancelledError:
                 break
             except Exception as exc:

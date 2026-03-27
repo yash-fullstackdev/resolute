@@ -107,6 +107,7 @@ func FetchQuotes(client *Client, securityIDs []string, logger zerolog.Logger) (m
 		return nil, 0, "", fmt.Errorf("create request: %w", err)
 	}
 	req.Header.Set("access-token", client.AccessToken)
+	req.Header.Set("client-id", client.ClientID)
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := client.HTTP.Do(req)

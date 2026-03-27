@@ -25,8 +25,6 @@ out/
 .turbo/
 
 # Environment
-.env
-.env.local
 .env.*.local
 
 # IDE
@@ -63,3 +61,7 @@ logs/
 
 SKILL.md
 *.json
+config.bat
+temp_auto_push.bat
+temp_interactive_push.bat
+branch_structure.json

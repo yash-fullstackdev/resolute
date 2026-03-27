@@ -20,7 +20,7 @@ func RecoverFromDB(ctx context.Context, pool *pgxpool.Pool, state *State, logger
 
 	rows, err := pool.Query(ctx,
 		`SELECT security_id, symbol, bucket, ltp, candle_open, candle_high, candle_low,
-		        volume_cum, oi_total, bid, ask
+		        volume_cum, bid, ask
 		 FROM equity_snapshots
 		 WHERE trading_date = $1
 		 ORDER BY security_id, bucket ASC`,
@@ -39,11 +39,11 @@ func RecoverFromDB(ctx context.Context, pool *pgxpool.Pool, state *State, logger
 			secID, symbol                           string
 			bucket                                  uint16
 			ltp, candleOpen, candleHigh, candleLow  float32
-			volumeCum, oiTotal                      uint64
+			volumeCum                               uint64
 			bid, ask                                float32
 		)
 		if err := rows.Scan(&secID, &symbol, &bucket, &ltp, &candleOpen, &candleHigh,
-			&candleLow, &volumeCum, &oiTotal, &bid, &ask); err != nil {
+			&candleLow, &volumeCum, &bid, &ask); err != nil {
 			logger.Warn().Err(err).Msg("skip malformed recovery row")
 			continue
 		}
@@ -52,7 +52,7 @@ func RecoverFromDB(ctx context.Context, pool *pgxpool.Pool, state *State, logger
 
 		// Replay through the derived compute to rebuild running VWAP state.
 		rs := state.GetDerivedState(secID)
-		derived.Compute(ltp, candleOpen, candleHigh, candleLow, volumeCum, oiTotal, bid, ask, rs)
+		derived.Compute(ltp, candleOpen, candleHigh, candleLow, volumeCum, 0, bid, ask, rs)
 
 		if bucket > maxBucket {
 			maxBucket = bucket

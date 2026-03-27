@@ -31,6 +31,10 @@ func main() {
 	if dhanAccessToken == "" {
 		log.Fatal().Msg("DHAN_ACCESS_TOKEN is required")
 	}
+	dhanClientID := os.Getenv("DHAN_CLIENT_ID")
+	if dhanClientID == "" {
+		log.Fatal().Msg("DHAN_CLIENT_ID is required")
+	}
 
 	natsURL := envOrDefault("NATS_URL", "nats://localhost:4222")
 	dbURL := envOrDefault("DATABASE_URL", "postgres://resolute:resolute@localhost:5432/resolute?sslmode=disable")
@@ -67,7 +71,7 @@ func main() {
 	defer pub.Close()
 
 	// ── Create Dhan HTTP client ──
-	dhanClient := dhan.NewClient(dhanBaseURL, dhanAccessToken)
+	dhanClient := dhan.NewClient(dhanBaseURL, dhanAccessToken, dhanClientID)
 
 	// ── Create and start poller ──
 	p := poller.New(dhanClient, pool, pub, log.Logger)
